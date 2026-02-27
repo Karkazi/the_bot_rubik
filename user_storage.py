@@ -153,6 +153,35 @@ def resolve_channel_user_id(channel_id: str, user_id: int) -> int:
     return int(primary) if primary is not None else int(user_id)
 
 
+def needs_phone_verification_channel(channel_id: str, user_id: int) -> bool:
+    """
+    Нужна ли этому пользователю (по основному профилю) актуализация номера телефона.
+    Используется для профилей, импортированных из Лупы.
+    """
+    primary = resolve_channel_user_id(channel_id, user_id)
+    db = load_user_db()
+    profile = db.get(str(primary))
+    if not profile:
+        return False
+    return bool(profile.get("phone_needs_verification"))
+
+
+def update_phone_and_mark_verified_channel(channel_id: str, user_id: int, phone: str) -> None:
+    """
+    Обновить телефон в профиле (по основному user_id) и снять флаг проверки телефона.
+    Канал (telegram/max) мапится в основной ключ через resolve_channel_user_id.
+    """
+    primary = resolve_channel_user_id(channel_id, user_id)
+    db = load_user_db()
+    profile = db.get(str(primary)) or {}
+    profile["phone"] = phone
+    # Флаг нужен только до первой успешной актуализации
+    if "phone_needs_verification" in profile:
+        profile.pop("phone_needs_verification", None)
+    db[str(primary)] = profile
+    save_user_db(db)
+
+
 def get_user_profile(user_id: int, channel_id: str = "telegram") -> Optional[Dict[str, Any]]:
     """Профиль пользователя. Для MAX: user_id — это max_user_id, при необходимости разрешается в telegram_id."""
     primary = resolve_channel_user_id(channel_id, user_id)

@@ -761,6 +761,9 @@ _pending_admin_delete_max: dict[int, bool] = {}
 # Ожидание ввода части ФИО для поиска при удалении пользователя
 _pending_admin_delete_search_max: dict[int, bool] = {}
 
+# Ожидание подтверждения номера телефона (контакт) для мигрированных пользователей
+_pending_verify_phone_max: dict[int, bool] = {}
+
 # user_id (MAX) -> {chat_id, user_id, mid} последнего сообщения бота (удаляем перед новым ответом, как в on_dute)
 _last_bot_message_max: dict[int, dict] = {}
 
@@ -923,7 +926,24 @@ async def run_max_bot() -> None:
                         continue
 
                     if source == "start":
-                        response = handle_start(user_id)
+                        from user_storage import needs_phone_verification_channel
+                        # Для мигрированных пользователей из Лупы просим подтвердить номер телефона
+                        if needs_phone_verification_channel("max", user_id):
+                            _pending_verify_phone_max[user_id] = True
+                            response = {
+                                "text": (
+                                    "📱 <b>Подтверждение номера телефона</b>\n\n"
+                                    "Нажмите кнопку ниже, чтобы поделиться контактом. "
+                                    "Мы обновим ваш номер телефона в профиле Rubik."
+                                ),
+                                "parse_mode": "HTML",
+                                "buttons": [
+                                    {"type": "request_contact", "label": "📱 Поделиться контактом"},
+                                    {"id": "back_to_main", "label": "◀️ Отмена"},
+                                ],
+                            }
+                        else:
+                            response = handle_start(user_id)
                         logger.debug("MAX: ответ на /start для user_id=%s", user_id)
                     elif isinstance(source, tuple) and source[0] == "callback":
                         callback_id = source[1]
@@ -1076,6 +1096,15 @@ async def run_max_bot() -> None:
                             response = {"text": f"✅ {msg}" if ok else f"❌ {msg}", "parse_mode": "HTML", "buttons": []}
                             if ok:
                                 response["buttons"] = [{"id": "back_to_main", "label": "◀️ В главное меню"}]
+                        elif user_id in _pending_verify_phone_max:
+                            from user_storage import update_phone_and_mark_verified_channel
+                            del _pending_verify_phone_max[user_id]
+                            update_phone_and_mark_verified_channel("max", user_id, phone)
+                            response = {
+                                "text": "✅ Номер телефона обновлён.",
+                                "parse_mode": "HTML",
+                                "buttons": [{"id": "back_to_main", "label": "◀️ В главное меню"}],
+                            }
                         else:
                             response = {"text": "Используйте /start и выберите «Привязать аккаунт».", "parse_mode": "HTML", "buttons": []}
                     elif isinstance(source, tuple) and source[0] == "message":
