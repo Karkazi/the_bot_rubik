@@ -129,6 +129,30 @@ the_bot_rubik/
 
 Остановка: `Ctrl+C` в терминале.
 
+## Запуск в Docker
+
+В корне проекта есть `Dockerfile` и `.dockerignore` (секреты и `data/` в образ не попадают).
+
+**Сборка образа:**
+```bash
+docker build -t the_bot_rubik .
+```
+
+**Запуск** (переменные из файла `.env` на хосте):
+```bash
+docker run --rm --env-file .env the_bot_rubik
+```
+
+**Сохранение данных** (профили, реестры, логи) на хосте:
+```bash
+docker run --rm --env-file .env -v ./data:/app/data the_bot_rubik
+```
+
+**Через docker-compose** (в корне можно добавить `docker-compose.yml` с `build: .`, `env_file: .env`, `volumes: ["./data:/app/data"]`):
+```bash
+docker compose up --build
+```
+
 ## Настройка
 
 1. Скопировать `.env.example` в `.env`.

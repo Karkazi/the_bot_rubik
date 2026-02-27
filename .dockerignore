@@ -1,0 +1,24 @@
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Логи и временные файлы
+*.log
+data/*
+
+# Секреты и локальная конфигурация
+.env
+.env.*
+
+# Виртуальные окружения
+venv/
+.venv/
+env/
+
+# Git и IDE
+.git
+.gitignore
+.idea/
+.vscode/
+
