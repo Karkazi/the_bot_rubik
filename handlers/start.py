@@ -124,6 +124,22 @@ async def cancel_message(message: Message, state: FSMContext):
     await message.answer(**kwargs)
 
 
+# Приветствие для неавторизованных: при первом сообщении (не /start) просим отправить /start
+WELCOME_UNREGISTERED = (
+    "Привет! Для работы с ботом отправьте команду /start."
+)
+
+
+@router.message(F.text)
+async def welcome_unregistered(message: Message):
+    if is_user_registered(message.from_user.id):
+        return
+    text = (message.text or "").strip()
+    if text.lower() in ("/start", "/cancel"):
+        return
+    await message.answer(WELCOME_UNREGISTERED)
+
+
 @router.callback_query(lambda c: c.data == "back_to_main")
 async def back_to_main(callback: CallbackQuery, state: FSMContext):
     await state.clear()

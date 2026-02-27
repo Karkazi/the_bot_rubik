@@ -172,6 +172,41 @@ async def _set_assignee(base_url: str, token: str, issue_key: str, username: str
         logger.warning("Не удалось установить assignee: %s", e)
 
 
+async def _set_reporter(base_url: str, token: str, issue_key: str, username: str) -> None:
+    """
+    Меняет автора задачи (reporter) через REST API.
+    Требует права Modify Reporter и наличие поля Reporter на экране редактирования.
+    """
+    if not username:
+        return
+    url = urljoin(base_url + "/", f"rest/api/2/issue/{issue_key}")
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {token}",
+    }
+    body = {"fields": {"reporter": {"name": username}}}
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.put(url, json=body, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                if resp.status in (200, 204):
+                    logger.debug("Reporter %s установлен для %s", username, issue_key)
+                elif resp.status in (400, 403):
+                    text = await resp.text()
+                    logger.warning(
+                        "Не удалось изменить автора для %s на %s: %s %s",
+                        issue_key,
+                        username,
+                        resp.status,
+                        (text or "")[:400],
+                    )
+                else:
+                    text = await resp.text()
+                    logger.warning("Ошибка изменения автора для %s: %s %s", issue_key, resp.status, (text or "")[:300])
+    except Exception as e:
+        logger.warning("Не удалось установить reporter: %s", e)
+
+
 async def issue_exists(issue_key: str) -> Optional[bool]:
     """
     Проверяет, существует ли заявка в Jira.

@@ -178,6 +178,7 @@ async def create_wms_issue(
     process: str,
     full_name: str = "",
     phone: str = "",
+    jira_username: str | None = None,
 ) -> Tuple[bool, str]:
     """
     Создаёт заявку типа wms_issue в проекте PW (REST API).
@@ -228,7 +229,14 @@ async def create_wms_issue(
             process=process,
         )
         if result and result.get("key"):
-            return True, result["key"]
+            issue_key = result["key"]
+            if jira_username:
+                try:
+                    from core.jira_aa import _set_reporter  # type: ignore[attr-defined]
+                    await _set_reporter(base_url, token, issue_key, jira_username)
+                except Exception as e:
+                    logger.warning("WMS: не удалось изменить автора для %s на %s: %s", issue_key, jira_username, e)
+            return True, issue_key
         logger.warning("JSM WMS не удалось, пробуем REST")
 
     # Запасной вариант: REST API, тип «Ошибка», поле Request type по возможности
@@ -260,6 +268,12 @@ async def create_wms_issue(
                     data = await resp.json()
                     issue_key = data.get("key", "")
                     logger.info("WMS заявка создана: %s", issue_key)
+                    if jira_username:
+                        try:
+                            from core.jira_aa import _set_reporter  # type: ignore[attr-defined]
+                            await _set_reporter(base_url, token, issue_key, jira_username)
+                        except Exception as e:
+                            logger.warning("WMS: не удалось изменить автора для %s на %s: %s", issue_key, jira_username, e)
                     return True, issue_key
                 text = await resp.text()
                 logger.warning("WMS создание заявки: HTTP %s %s", resp.status, text[:500])
