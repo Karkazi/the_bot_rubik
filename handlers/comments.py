@@ -13,6 +13,7 @@ from user_storage import is_user_registered, get_user_profile
 from core.password_requests import get_pending_issue_key_by_user
 from core.support.api import support_api
 from core.jira_aa import get_issue_comments, add_comment
+from core.jira_wms import add_attachments_to_issue
 
 CHANNEL_ID = "telegram"
 
@@ -78,24 +79,30 @@ async def add_comment_start(callback: CallbackQuery, state: FSMContext):
     await state.set_state(CommentStates.WAITING_FOR_COMMENT)
     await state.update_data(issue_key=issue_key)
     await callback.message.edit_text(
-        f"✍️ Введите комментарий к заявке <b>{issue_key}</b> (или /cancel для отмены):",
+        f"✍️ Введите комментарий к заявке <b>{issue_key}</b> (или /cancel для отмены).\n\n"
+        "Можно в одном сообщении приложить файл (документ/фото) — он будет добавлен как вложение к заявке.",
         parse_mode="HTML",
         reply_markup=get_cancel_keyboard(),
     )
     await callback.answer()
 
 
-@router.message(CommentStates.WAITING_FOR_COMMENT, F.text)
+@router.message(CommentStates.WAITING_FOR_COMMENT)
 async def process_comment(message: Message, state: FSMContext):
-    if message.text and message.text.strip().lower() == "/cancel":
+    # Отмена
+    text_raw = (message.text or message.caption or "").strip()
+    if text_raw.lower() == "/cancel":
         await state.clear()
         await message.reply("Отменено.", reply_markup=get_main_menu_keyboard(message.from_user.id))
         return
-    text = (message.text or "").strip()
-    if not text:
-        await message.reply("Введите текст комментария или /cancel.", reply_markup=get_cancel_keyboard())
+    # Текст комментария: используем текст сообщения или подпись к файлу
+    if not text_raw:
+        await message.reply(
+            "Введите текст комментария или добавьте подпись к файлу (caption). Либо /cancel.",
+            reply_markup=get_cancel_keyboard(),
+        )
         return
-    if len(text) > MAX_COMMENT_LEN:
+    if len(text_raw) > MAX_COMMENT_LEN:
         await message.reply(f"Комментарий не длиннее {MAX_COMMENT_LEN} символов.", reply_markup=get_cancel_keyboard())
         return
     data = await state.get_data()
@@ -106,17 +113,70 @@ async def process_comment(message: Message, state: FSMContext):
         return
     profile = get_user_profile(message.from_user.id) or {}
     full_name = (profile.get("full_name") or "").strip() or "Пользователь"
-    comment_body = f"[{full_name}] {text}"
-    ok = await add_comment(issue_key, comment_body)
-    await state.clear()
-    if ok:
-        await message.reply(
-            f"✅ Комментарий добавлен к заявке {issue_key}.",
-            reply_markup=get_main_menu_keyboard(message.from_user.id),
-        )
-        logger.info("Пользователь %s добавил комментарий к %s", message.from_user.id, issue_key)
-    else:
-        await message.reply(
-            "❌ Не удалось добавить комментарий. Попробуйте позже.",
-            reply_markup=get_main_menu_keyboard(message.from_user.id),
-        )
+    comment_body = f"[{full_name}] {text_raw}"
+
+    # Скачиваем вложения (если есть) во временные файлы
+    attachment_paths = []
+    bot = message.bot
+    try:
+        file_ids = []
+        if message.document:
+            file_ids.append(message.document.file_id)
+        if message.photo:
+            # Берём фото максимального размера
+            file_ids.append(message.photo[-1].file_id)
+        if message.video:
+            file_ids.append(message.video.file_id)
+
+        if file_ids:
+            import tempfile
+            import os
+
+            for fid in file_ids[:10]:
+                try:
+                    f = await bot.get_file(fid)
+                    safe_name = (f.file_path or fid).replace("/", "_").replace("\\", "_")
+                    path = os.path.join(tempfile.gettempdir(), f"comment_{safe_name}")
+                    await bot.download_file(f.file_path, path)
+                    if os.path.isfile(path) and os.path.getsize(path) <= 10 * 1024 * 1024:
+                        attachment_paths.append(path)
+                    else:
+                        # слишком большой или не скачался
+                        try:
+                            os.remove(path)
+                        except Exception:
+                            pass
+                except Exception as e:
+                    logger.warning("Скачивание вложения TG comment %s: %s", fid, e)
+
+        ok_comment = await add_comment(issue_key, comment_body)
+        added_files = 0
+        if ok_comment and attachment_paths:
+            added_files, _ = await add_attachments_to_issue(issue_key, attachment_paths)
+        await state.clear()
+
+        if ok_comment:
+            suffix = f" Прикреплено файлов: {added_files}." if added_files else ""
+            await message.reply(
+                f"✅ Комментарий добавлен к заявке {issue_key}.{suffix}",
+                reply_markup=get_main_menu_keyboard(message.from_user.id),
+            )
+            logger.info(
+                "Пользователь %s добавил комментарий к %s (вложений: %s)",
+                message.from_user.id,
+                issue_key,
+                added_files,
+            )
+        else:
+            await message.reply(
+                "❌ Не удалось добавить комментарий. Попробуйте позже.",
+                reply_markup=get_main_menu_keyboard(message.from_user.id),
+            )
+    finally:
+        for path in attachment_paths:
+            try:
+                import os
+                if os.path.isfile(path):
+                    os.remove(path)
+            except Exception:
+                pass

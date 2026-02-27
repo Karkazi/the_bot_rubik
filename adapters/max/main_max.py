@@ -1222,8 +1222,42 @@ async def run_max_bot() -> None:
                                 full_name = (profile.get("full_name") or "").strip() or "Пользователь"
                                 comment_body = f"[{full_name}] {(text or '').strip()}"
                                 ok = await jira_add_comment(issue_key, comment_body)
+
+                                # Вложения из сообщения (если есть): добавляем к заявке
+                                added_files = 0
+                                if ok and attachment_list:
+                                    import tempfile
+                                    import os as _os
+                                    from core.jira_wms import add_attachments_to_issue
+
+                                    temp_paths: list[str] = []
+                                    try:
+                                        for att in attachment_list[:10]:
+                                            if not isinstance(att, dict) or not att.get("url"):
+                                                continue
+                                            downloaded = await _download_attachment_max(bot, att)
+                                            if not downloaded:
+                                                continue
+                                            content, name = downloaded
+                                            ext = _os.path.splitext(name)[1] if name and "." in name else ".bin"
+                                            f = tempfile.NamedTemporaryFile(delete=False, suffix=ext, prefix="comment_")
+                                            f.write(content)
+                                            f.close()
+                                            temp_paths.append(f.name)
+                                        if temp_paths:
+                                            added_files, _ = await add_attachments_to_issue(issue_key, temp_paths)
+                                            logger.info("MAX comment: к заявке %s добавлено вложений: %s", issue_key, added_files)
+                                    finally:
+                                        for p in temp_paths:
+                                            try:
+                                                _os.unlink(p)
+                                            except Exception:
+                                                pass
+
+                                suffix = f" (вложений: {added_files})" if ok and added_files else ""
                                 response = {
-                                    "text": f"✅ Комментарий добавлен к заявке {issue_key}." if ok else "❌ Не удалось добавить комментарий.",
+                                    "text": (f"✅ Комментарий добавлен к заявке {issue_key}{suffix}."
+                                             if ok else "❌ Не удалось добавить комментарий."),
                                     "parse_mode": "HTML",
                                     "buttons": [{"id": "back_to_main", "label": "🔙 В главное меню"}],
                                 }
