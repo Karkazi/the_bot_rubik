@@ -1,0 +1,64 @@
+# Каталог типов заявок для Support Core (п. 1.3 плана).
+# По id типа Core создаёт заявку в Jira по project_key, issue_type и полям.
+# Добавление типа = новая запись; адаптеры строят меню «Создать заявку» из каталога.
+
+rubik_password_change:
+  label: "🔑 Смена пароля"
+  project_key: AA
+  issue_type: Задача
+  # Jira Service Desk (JSM)
+  service_desk_id: "23"
+  request_type_id: "964"
+  visible: true
+  # Поля формы: что запрашивать у пользователя (остальное из профиля)
+  form_fields:
+    - name: password_new
+      type: text
+      label: Новый пароль
+  # Маппинг в Jira: AD account, Existing phone, Department — из профиля; password_new — из формы
+  jira_fields:
+    ad_account: profile.login
+    existing_phone: profile.phone
+    department: profile.department
+    password_new: form.password_new
+
+# WMS (the_bot_wms): заявки по складу
+wms_issue:
+  label: "📦 WMS"
+  project_key: PW
+  issue_type: Задача
+  visible: true
+  form_fields:
+    - name: summary
+      type: text
+      label: Тема заявки
+    - name: description
+      type: text
+      label: Описание
+    - name: process
+      type: text
+      label: Процесс
+  # department — из профиля (учётные данные) или ввод при создании
+
+# Lupa (the_bot_lupa): заявки по поиску petrovich.ru
+lupa_search:
+  label: "🔍 Поиск / сайт (Lupa)"
+  project_key: WHD
+  issue_type: Incident
+  visible: true
+  form_fields:
+    - name: description
+      type: text
+      label: Описание проблемы
+    - name: problematic_service
+      type: text
+      label: Проблемный сервис (Приложение / Сайт)
+    - name: request_type
+      type: text
+      label: Тип запроса
+    - name: subdivision
+      type: text
+      label: Подразделение
+    - name: city
+      type: text
+      label: Город (необязательно)

@@ -1,0 +1,61 @@
+
+---
+
+## 11. Переменные окружения (.env) для единого бота
+
+Ниже перечислены все переменные, необходимые для объединённого проекта (Support Core + адаптеры MAX и Telegram). Источники: текущий `the_bot_rubik`, `the_bot_wms`, `the_bot_lupa`.
+
+### 11.1 Список переменных
+
+| Переменная | Назначение |
+|------------|------------|
+| **Telegram (три бота)** | |
+| `TELEGRAM_TOKEN_WMS` | Токен бота WMS в Telegram |
+| `TELEGRAM_TOKEN_LUPA` | Токен бота Lupa в Telegram |
+| `TELEGRAM_TOKEN_RUBIK` | Токен бота Rubik в Telegram |
+| **MAX** | |
+| `MAX_TOKEN` | Токен единого support-бота в MAX (один на всё) |
+| **Админка** | |
+| `ADMIN_IDS` | Telegram ID администраторов через запятую |
+| **Jira (общие)** | |
+| `JIRA_LOGIN_URL` | URL Jira (например https://jira.petrovich.tech) |
+| `JIRA_TOKEN` | API-токен Jira (Bearer) |
+| `JIRA_USERNAME` | (опционально) для basic auth, напр. в WMS |
+| `JIRA_PASSWORD` | (опционально) для basic auth |
+| **Jira AA (Rubik: смена пароля)** | |
+| `JIRA_AA_PROJECT_KEY` | Ключ проекта AA |
+| `JIRA_AA_ISSUE_TYPE` | Тип задачи (например «Задача») |
+| `JIRA_AA_ISSUE_TYPE_ID` | ID типа задачи (надёжнее имени) |
+| `JIRA_AA_ASSIGNEE_USERNAME` | Исполнитель по умолчанию |
+| `JIRA_AA_SET_ASSIGNEE` | 1 — назначать, 0 — не назначать |
+| `JIRA_AA_SERVICE_DESK_ID` | ID Service Desk (напр. 23) |
+| `JIRA_AA_REQUEST_TYPE_ID` | ID типа запроса «Смена пароля» (напр. 964) |
+| `JIRA_AA_FIELD_AD_ACCOUNT` | Поле AD account |
+| `JIRA_AA_FIELD_EXISTING_PHONE` | Поле «текущий телефон» |
+| `JIRA_AA_FIELD_PASSWORD_NEW` | Поле «новый пароль» |
+| `JIRA_AA_FIELD_DEPARTMENT` | Поле подразделения (напр. customfield_11406) |
+| **Jira WMS (при переносе)** | `JIRA_WMS_PROJECT_KEY` = PW и т.д. |
+| **Jira Lupa (при переносе)** | `JIRA_LUPA_PROJECT_KEY` = WHD и т.д. |
+| **Прочее** | `PASSWORD_STATUS_CHECK_INTERVAL`, `COMMENTS_CHECK_INTERVAL`, `ANTISPAM_COOLDOWN`, `LOG_LEVEL`, `ENCRYPT_USER_DATA`, `USER_DATA_ENCRYPTION_KEY` |
+
+### 11.2 Пример блока для .env
+
+```
+TELEGRAM_TOKEN_WMS=your_telegram_bot_token_wms
+TELEGRAM_TOKEN_LUPA=your_telegram_bot_token_lupa
+TELEGRAM_TOKEN_RUBIK=your_telegram_bot_token_rubik
+MAX_TOKEN=your_max_bot_token
+ADMIN_IDS=123456789
+JIRA_LOGIN_URL=https://jira.petrovich.tech
+JIRA_TOKEN=your_jira_api_token
+JIRA_AA_PROJECT_KEY=AA
+JIRA_AA_ISSUE_TYPE=Задача
+JIRA_AA_ISSUE_TYPE_ID=10401
+JIRA_AA_ASSIGNEE_USERNAME=Robot_Scripts_PS
+JIRA_AA_SERVICE_DESK_ID=23
+JIRA_AA_REQUEST_TYPE_ID=964
+JIRA_AA_FIELD_AD_ACCOUNT=customfield_14320
+JIRA_AA_FIELD_EXISTING_PHONE=customfield_13103
+JIRA_AA_FIELD_PASSWORD_NEW=customfield_17506
+JIRA_AA_FIELD_DEPARTMENT=customfield_11406
+```

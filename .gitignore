@@ -1,0 +1,38 @@
+### Python cache / build
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+dist/
+build/
+*.egg-info/
+
+### Virtual environments
+venv/
+.venv/
+env/
+.env.local/
+
+### IDE / tooling
+.idea/
+.vscode/
+.pytest_cache/
+
+### Local configuration and secrets
+.env
+.env.*
+!env.example
+
+### Application data (contains персональные данные и служебную информацию)
+data/*.json
+data/*.log
+data/lupa_tickets_log.xlsx
+
+### Logs
+*.log
+
+### OS files
+Thumbs.db
+.DS_Store
+
