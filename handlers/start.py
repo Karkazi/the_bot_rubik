@@ -11,7 +11,7 @@ from aiogram.types import Message, CallbackQuery, FSInputFile
 from aiogram.fsm.context import FSMContext
 from aiogram.filters import Command
 
-from user_storage import is_user_registered, bind_account_by_phone
+from user_storage import is_user_registered, bind_account_by_phone, needs_phone_verification_channel, update_phone_and_mark_verified_channel
 from core.support.api import support_api
 from core.support.models import Text, Menu
 from adapters.telegram.render import render_menu_to_kwargs, render_text_to_kwargs
@@ -26,6 +26,7 @@ CHANNEL_ID = "telegram"
 @router.callback_query(lambda c: c.data == "bind_account")
 async def bind_account_start(callback: CallbackQuery, state: FSMContext):
     await state.set_state(BindAccountStates.WAITING_FOR_CONTACT)
+    await state.update_data(mode="bind")
     await callback.message.edit_text(
         "🔗 <b>Привязать аккаунт</b>\n\n"
         "Нажмите кнопку ниже, чтобы поделиться номером телефона. "
@@ -41,6 +42,8 @@ async def bind_account_start(callback: CallbackQuery, state: FSMContext):
 
 @router.message(BindAccountStates.WAITING_FOR_CONTACT, F.contact)
 async def bind_account_contact(message: Message, state: FSMContext):
+    data = await state.get_data()
+    mode = data.get("mode") or "bind"
     if not message.contact or message.contact.user_id != message.from_user.id:
         await message.reply(
             "Пожалуйста, поделитесь именно своим контактом (кнопка «Поделиться контактом»).",
@@ -51,15 +54,31 @@ async def bind_account_contact(message: Message, state: FSMContext):
     if not phone:
         await message.reply("Не удалось получить номер. Попробуйте ещё раз.", reply_markup=get_contact_request_keyboard())
         return
-    ok, msg = bind_account_by_phone(message.from_user.id, phone)
+
+    user_id = message.from_user.id
+
+    if mode == "verify_phone":
+        # Обновляем телефон в профиле и снимаем флаг проверки
+        update_phone_and_mark_verified_channel(CHANNEL_ID, user_id, phone)
+        await state.clear()
+        await message.reply(
+            "✅ Номер телефона обновлён и подтверждён.",
+            reply_markup=remove_reply_keyboard(),
+        )
+        response = support_api.get_main_menu(CHANNEL_ID, user_id)
+        kwargs = render_menu_to_kwargs(response)
+        await message.answer(**kwargs)
+        return
+
+    ok, msg = bind_account_by_phone(user_id, phone)
     await state.clear()
     await message.reply(msg, reply_markup=remove_reply_keyboard())
     if ok:
-        response = support_api.get_main_menu(CHANNEL_ID, message.from_user.id)
+        response = support_api.get_main_menu(CHANNEL_ID, user_id)
         kwargs = render_menu_to_kwargs(response)
         await message.answer(**kwargs)
     else:
-        response = support_api.get_start(CHANNEL_ID, message.from_user.id)
+        response = support_api.get_start(CHANNEL_ID, user_id)
         kwargs = render_menu_to_kwargs(response) if isinstance(response, Menu) else render_text_to_kwargs(response)
         await message.answer(**kwargs)
 
@@ -71,6 +90,16 @@ async def cmd_start(message: Message, state: FSMContext):
     response = support_api.get_start(CHANNEL_ID, user_id)
     kwargs = render_menu_to_kwargs(response) if isinstance(response, Menu) else render_text_to_kwargs(response)
     await message.answer(**kwargs)
+
+    # Для мигрированных пользователей из Лупы: просим подтвердить номер телефона
+    if needs_phone_verification_channel(CHANNEL_ID, user_id):
+        await state.set_state(BindAccountStates.WAITING_FOR_CONTACT)
+        await state.update_data(mode="verify_phone")
+        await message.answer(
+            "📱 Для продолжения подтвердите номер телефона.\n\n"
+            "Нажмите кнопку «Поделиться контактом», чтобы обновить номер в профиле.",
+            reply_markup=get_contact_request_keyboard(),
+        )
 
 
 @router.callback_query(lambda c: c.data == "cancel")
@@ -93,6 +122,22 @@ async def cancel_message(message: Message, state: FSMContext):
     kwargs = render_menu_to_kwargs(response)
     kwargs["text"] = "❌ Действие отменено." if is_user_registered(user_id) else "Регистрация отменена."
     await message.answer(**kwargs)
+
+
+# Приветствие для неавторизованных: при первом сообщении (не /start) просим отправить /start
+WELCOME_UNREGISTERED = (
+    "Привет! Для работы с ботом отправьте команду /start."
+)
+
+
+@router.message(F.text)
+async def welcome_unregistered(message: Message):
+    if is_user_registered(message.from_user.id):
+        return
+    text = (message.text or "").strip()
+    if text.lower() in ("/start", "/cancel"):
+        return
+    await message.answer(WELCOME_UNREGISTERED)
 
 
 @router.callback_query(lambda c: c.data == "back_to_main")

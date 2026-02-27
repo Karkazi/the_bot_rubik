@@ -169,6 +169,7 @@ async def create_ticket(
             process=process,
             full_name=(profile.get("full_name") or "").strip(),
             phone=(profile.get("phone") or "").strip(),
+            jira_username=(profile.get("jira_username") or "").strip() or None,
         )
         if not ok:
             return False, result, None
@@ -206,6 +207,7 @@ async def create_ticket(
             request_type=(form_data.get("request_type") or "проблемы с поиском").strip(),
             subdivision=subdivision,
             city=(form_data.get("city") or "").strip(),
+            jira_username=(profile.get("jira_username") or "").strip() or None,
         )
         if not ok:
             return False, result, None

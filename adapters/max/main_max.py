@@ -761,6 +761,9 @@ _pending_admin_delete_max: dict[int, bool] = {}
 # Ожидание ввода части ФИО для поиска при удалении пользователя
 _pending_admin_delete_search_max: dict[int, bool] = {}
 
+# Ожидание подтверждения номера телефона (контакт) для мигрированных пользователей
+_pending_verify_phone_max: dict[int, bool] = {}
+
 # user_id (MAX) -> {chat_id, user_id, mid} последнего сообщения бота (удаляем перед новым ответом, как в on_dute)
 _last_bot_message_max: dict[int, dict] = {}
 
@@ -923,7 +926,24 @@ async def run_max_bot() -> None:
                         continue
 
                     if source == "start":
-                        response = handle_start(user_id)
+                        from user_storage import needs_phone_verification_channel
+                        # Для мигрированных пользователей из Лупы просим подтвердить номер телефона
+                        if needs_phone_verification_channel("max", user_id):
+                            _pending_verify_phone_max[user_id] = True
+                            response = {
+                                "text": (
+                                    "📱 <b>Подтверждение номера телефона</b>\n\n"
+                                    "Нажмите кнопку ниже, чтобы поделиться контактом. "
+                                    "Мы обновим ваш номер телефона в профиле Rubik."
+                                ),
+                                "parse_mode": "HTML",
+                                "buttons": [
+                                    {"type": "request_contact", "label": "📱 Поделиться контактом"},
+                                    {"id": "back_to_main", "label": "◀️ Отмена"},
+                                ],
+                            }
+                        else:
+                            response = handle_start(user_id)
                         logger.debug("MAX: ответ на /start для user_id=%s", user_id)
                     elif isinstance(source, tuple) and source[0] == "callback":
                         callback_id = source[1]
@@ -1076,209 +1096,260 @@ async def run_max_bot() -> None:
                             response = {"text": f"✅ {msg}" if ok else f"❌ {msg}", "parse_mode": "HTML", "buttons": []}
                             if ok:
                                 response["buttons"] = [{"id": "back_to_main", "label": "◀️ В главное меню"}]
+                        elif user_id in _pending_verify_phone_max:
+                            from user_storage import update_phone_and_mark_verified_channel
+                            del _pending_verify_phone_max[user_id]
+                            update_phone_and_mark_verified_channel("max", user_id, phone)
+                            response = {
+                                "text": "✅ Номер телефона обновлён.",
+                                "parse_mode": "HTML",
+                                "buttons": [{"id": "back_to_main", "label": "◀️ В главное меню"}],
+                            }
                         else:
                             response = {"text": "Используйте /start и выберите «Привязать аккаунт».", "parse_mode": "HTML", "buttons": []}
                     elif isinstance(source, tuple) and source[0] == "message":
                         text = source[1]
-                        payload = raw.get("payload") or raw
-                        raw_msg = payload.get("message") or payload.get("edited_message")
-                        attachment_list = _extract_file_attachments_from_max_message(raw_msg) if isinstance(raw_msg, dict) else None
-                        if (text or "").strip().lower() == "/showracemenu":
-                            pict_dir = Path(__file__).resolve().parents[2] / "Pict"
-                            sent = False
-                            if pict_dir.is_dir():
-                                exts = ("*.jpg", "*.jpeg", "*.png", "*.gif", "*.webp")
-                                files = []
-                                for ext in exts:
-                                    files.extend(pict_dir.glob(ext))
-                                if files:
-                                    path = random.choice(files)
-                                    token = await _upload_image_max(bot, str(path))
-                                    if token:
-                                        last = _last_bot_message_max.pop(user_id, None)
-                                        if last and last.get("mid"):
-                                            await _delete_message_max(
-                                                bot, last.get("chat_id"), last.get("user_id"), last["mid"]
-                                            )
-                                        att = _image_attachment_from_token(token)
-                                        new_mid = await _send_message_max(
-                                            bot, r_chat, r_user, "\u200b", att, None
-                                        )
-                                        if new_mid:
-                                            _last_bot_message_max[user_id] = {
-                                                "chat_id": r_chat,
-                                                "user_id": r_user,
-                                                "mid": new_mid,
-                                            }
-                                            sent = True
-                            if not sent:
-                                last = _last_bot_message_max.pop(user_id, None)
-                                if last and last.get("mid"):
-                                    await _delete_message_max(
-                                        bot, last.get("chat_id"), last.get("user_id"), last["mid"]
-                                    )
-                                new_mid = await _send_message_max(
-                                    bot, r_chat, r_user, "…", None, None
-                                )
-                                if new_mid:
-                                    _last_bot_message_max[user_id] = {
-                                        "chat_id": r_chat,
-                                        "user_id": r_user,
-                                        "mid": new_mid,
-                                    }
-                            continue
-                        if user_id in _pending_admin_delete_search_max:
-                            _pending_admin_delete_search_max.pop(user_id, None)
-                            from config import is_channel_admin
-                            from user_storage import search_users_by_fio
-                            if not is_channel_admin("max", user_id):
-                                response = handle_main_menu(user_id)
-                            else:
-                                inp = (text or "").strip()
-                                if not inp:
-                                    response = {"text": "Введите часть ФИО для поиска.", "parse_mode": "HTML", "buttons": [{"id": "admin_del_back_choice", "label": "🔙 К выбору способа"}], "_set_pending_admin_search": True}
-                                else:
-                                    matches = search_users_by_fio(inp, limit=20)
-                                    if not matches:
-                                        response = {"text": f"По запросу «{inp}» никого не найдено. Введите другую часть ФИО или нажмите «К выбору способа».", "parse_mode": "HTML", "buttons": [{"id": "admin_del_back_choice", "label": "🔙 К выбору способа"}], "_set_pending_admin_search": True}
-                                    else:
-                                        buttons = []
-                                        for uid, profile in matches:
-                                            name = (profile.get("full_name") or "—").strip() or "—"
-                                            login = (profile.get("login") or "").strip() or "—"
-                                            label = f"{name} ({login})" if len(f"{name} ({login})") <= 40 else f"{name[:28]}… ({login})"
-                                            buttons.append({"id": f"admin_del_uid_{uid}", "label": label})
-                                        buttons.append({"id": "admin_del_back_choice", "label": "🔙 К выбору способа"})
-                                        response = {"text": f"Найдено по «{inp}»: {len(matches)}. Выберите пользователя для удаления:", "parse_mode": "HTML", "buttons": buttons}
-                        elif user_id in _pending_admin_delete_max:
-                            _pending_admin_delete_max.pop(user_id, None)
-                            from config import is_channel_admin
-                            from user_storage import delete_user, get_user_profile, find_by_login, resolve_channel_user_id
-                            if not is_channel_admin("max", user_id):
-                                response = handle_main_menu(user_id)
-                            elif not (text or "").strip():
-                                response = {"text": "Введите Telegram ID или логин пользователя для удаления.", "parse_mode": "HTML", "buttons": [{"id": "admin_panel", "label": "🔙 В админ-панель"}], "_set_pending_admin_delete": True}
-                            elif (text or "").strip().lower() in ("отмена", "cancel", "/cancel"):
-                                response = handle_callback("admin_panel", user_id)
-                                if response is None:
-                                    response = handle_main_menu(user_id)
-                            else:
-                                inp = (text or "").strip()
-                                primary_id = None
-                                if inp.isdigit():
-                                    uid = int(inp)
-                                    profile = get_user_profile(uid, "max")
-                                    if profile is not None:
-                                        primary_id = resolve_channel_user_id("max", uid)
-                                else:
-                                    primary_id = find_by_login(inp)
-                                if primary_id is None:
-                                    response = {"text": "Пользователь не найден. Введите Telegram ID (число) или рабочий логин.", "parse_mode": "HTML", "buttons": [{"id": "admin_panel", "label": "🔙 В админ-панель"}], "_set_pending_admin_delete": True}
-                                else:
-                                    profile = get_user_profile(primary_id)
-                                    deleted = delete_user(primary_id)
-                                    if deleted:
-                                        response = {"text": f"✅ Пользователь удалён: {profile.get('full_name', '—')} ({profile.get('login', '—')}, ID {primary_id}).", "parse_mode": "HTML", "buttons": [{"id": "admin_panel", "label": "🔙 В админ-панель"}]}
-                                        logger.info("MAX админ %s удалил пользователя %s (%s)", user_id, primary_id, profile.get("login"))
-                                    else:
-                                        response = {"text": "Не удалось удалить пользователя.", "parse_mode": "HTML", "buttons": [{"id": "admin_panel", "label": "🔙 В админ-панель"}]}
-                        elif user_id in _pending_comment_max:
-                            issue_key = _pending_comment_max.pop(user_id, None)
-                            if (text or "").strip().lower() in ("отмена", "cancel", "/cancel"):
-                                response = handle_main_menu(user_id)
-                            elif issue_key and (text or "").strip():
-                                from core.jira_aa import add_comment as jira_add_comment
-                                from user_storage import get_user_profile
-                                profile = get_user_profile(user_id, "max") or {}
-                                full_name = (profile.get("full_name") or "").strip() or "Пользователь"
-                                comment_body = f"[{full_name}] {(text or '').strip()}"
-                                ok = await jira_add_comment(issue_key, comment_body)
-                                response = {
-                                    "text": f"✅ Комментарий добавлен к заявке {issue_key}." if ok else "❌ Не удалось добавить комментарий.",
-                                    "parse_mode": "HTML",
-                                    "buttons": [{"id": "back_to_main", "label": "🔙 В главное меню"}],
-                                }
-                            else:
-                                _pending_comment_max[user_id] = issue_key
-                                response = {"text": "Введите текст комментария или нажмите Отмена.", "parse_mode": "HTML", "buttons": [{"id": "cancel", "label": "❌ Отмена"}]}
-                        elif user_id in _pending_bind_max:
-                            del _pending_bind_max[user_id]
-                            ok, msg = bind_account_by_phone(user_id, text, "max")
-                            response = {"text": f"✅ {msg}" if ok else f"❌ {msg}", "parse_mode": "HTML", "buttons": []}
-                            if ok:
-                                response["buttons"] = [{"id": "back_to_main", "label": "◀️ В главное меню"}]
-                        elif user_id in _pending_password_max:
-                            _pending_password_max.pop(user_id, None)
-                            if (text or "").strip().lower() in ("отмена", "cancel", "/cancel"):
-                                response = handle_main_menu(user_id)
-                            else:
-                                from core.password import request_password_change
-                                ok, msg = await request_password_change(user_id, (text or "").strip(), "max")
-                                response = {"text": f"✅ {msg}" if ok else f"❌ {msg}", "parse_mode": "HTML", "buttons": [{"id": "back_to_main", "label": "🔙 В главное меню"}]}
-                        elif wms_flow.is_in_wms_flow(user_id):
-                            state = getattr(wms_flow, "_flow", {}).get(user_id, {})
-                            if state.get("step") == "attachments" and isinstance(raw_msg, dict):
-                                body = raw_msg.get("body") or raw_msg
-                                logger.info(
-                                    "MAX WMS attachments: message keys=%s, body keys=%s, attachment_list len=%s",
-                                    list(raw_msg.keys()),
-                                    list(body.keys()) if isinstance(body, dict) else type(body).__name__,
-                                    len(attachment_list) if attachment_list else 0,
-                                )
-                            response = await wms_flow.handle_wms_message(user_id, text, attachment_list=attachment_list)
-                            if response is None:
-                                response = {"text": "Используйте кнопки или /start.", "parse_mode": "HTML", "buttons": [{"id": "cancel", "label": "❌ Отмена"}]}
-                            elif response.get("create_ticket"):
-                                ct = response["create_ticket"]
-                                form_data = ct.get("form_data", {})
-                                attachment_tokens = ct.get("attachment_tokens") or []
-                                ticket_type_id = ct.get("ticket_type_id") or "wms_issue"
-                                import tempfile
-                                import os as _os
-                                temp_paths = []
-                                try:
-                                    for att in attachment_tokens[:10]:
-                                        if not isinstance(att, dict) or not att.get("url"):
-                                            continue
-                                        downloaded = await _download_attachment_max(bot, att)
-                                        if downloaded:
-                                            content, name = downloaded
-                                            ext = _os.path.splitext(name)[1] if name and "." in name else ".bin"
-                                            f = tempfile.NamedTemporaryFile(delete=False, suffix=ext, prefix="wms_")
-                                            f.write(content)
-                                            f.close()
-                                            temp_paths.append(f.name)
-                                    if ticket_type_id == "wms_settings":
-                                        success, issue_key, user_msg = await support_api.create_ticket("max", user_id, ticket_type_id, form_data, attachment_paths=temp_paths)
-                                    else:
-                                        success, issue_key, user_msg = await support_api.create_ticket("max", user_id, ticket_type_id, form_data)
-                                        if success and issue_key and temp_paths:
-                                            from core.jira_wms import add_attachments_to_issue
-                                            added, _ = await add_attachments_to_issue(issue_key, temp_paths)
-                                            logger.info("MAX WMS: к заявке %s добавлено вложений: %s", issue_key, added)
-                                    if ticket_type_id != "wms_settings" and attachment_tokens and not temp_paths:
-                                        logger.warning("MAX WMS: вложений было %s, скачано 0", len(attachment_tokens))
-                                finally:
-                                    for p in temp_paths:
-                                        try:
-                                            _os.unlink(p)
-                                        except Exception:
-                                            pass
-                                msg_show = user_msg if success else issue_key
-                                response = {"text": f"✅ {msg_show}" if success else f"❌ {msg_show}", "parse_mode": "HTML", "buttons": [{"id": "back_to_main", "label": "🔙 В главное меню"}]}
-                        elif lupa_flow.is_in_lupa_flow(user_id):
-                            response = await lupa_flow.handle_lupa_message(user_id, text)
-                            if response is None:
-                                response = {"text": "Используйте кнопки или /start.", "parse_mode": "HTML", "buttons": [{"id": "cancel", "label": "❌ Отмена"}]}
-                            elif response.get("create_ticket"):
-                                ct = response["create_ticket"]
-                                form_data = ct.get("form_data", {})
-                                ticket_type_id = ct.get("ticket_type_id") or "lupa_search"
-                                success, issue_key, user_msg = await support_api.create_ticket("max", user_id, ticket_type_id, form_data)
-                                msg_show = user_msg if success else issue_key
-                                response = {"text": f"✅ {msg_show}" if success else f"❌ {msg_show}", "parse_mode": "HTML", "buttons": [{"id": "back_to_main", "label": "🔙 В главное меню"}]}
+                        from user_storage import is_user_registered as _is_user_registered_max
+                        if not _is_user_registered_max(user_id, "max"):
+                            response = {
+                                "text": "Привет! Для работы с ботом отправьте команду /start.",
+                                "parse_mode": "HTML",
+                                "buttons": [],
+                            }
                         else:
-                            response = {"text": "Используйте /start для начала.", "parse_mode": "HTML", "buttons": []}
+                            payload = raw.get("payload") or raw
+                            raw_msg = payload.get("message") or payload.get("edited_message")
+                            attachment_list = _extract_file_attachments_from_max_message(raw_msg) if isinstance(raw_msg, dict) else None
+                            if (text or "").strip().lower() == "/showracemenu":
+                                pict_dir = Path(__file__).resolve().parents[2] / "Pict"
+                                sent = False
+                                if pict_dir.is_dir():
+                                    exts = ("*.jpg", "*.jpeg", "*.png", "*.gif", "*.webp")
+                                    files = []
+                                    for ext in exts:
+                                        files.extend(pict_dir.glob(ext))
+                                    if files:
+                                        path = random.choice(files)
+                                        token = await _upload_image_max(bot, str(path))
+                                        if token:
+                                            last = _last_bot_message_max.pop(user_id, None)
+                                            if last and last.get("mid"):
+                                                await _delete_message_max(
+                                                    bot, last.get("chat_id"), last.get("user_id"), last["mid"]
+                                                )
+                                            att = _image_attachment_from_token(token)
+                                            new_mid = await _send_message_max(
+                                                bot, r_chat, r_user, "\u200b", att, None
+                                            )
+                                            if new_mid:
+                                                _last_bot_message_max[user_id] = {
+                                                    "chat_id": r_chat,
+                                                    "user_id": r_user,
+                                                    "mid": new_mid,
+                                                }
+                                                sent = True
+                                if not sent:
+                                    last = _last_bot_message_max.pop(user_id, None)
+                                    if last and last.get("mid"):
+                                        await _delete_message_max(
+                                            bot, last.get("chat_id"), last.get("user_id"), last["mid"]
+                                        )
+                                    new_mid = await _send_message_max(
+                                        bot, r_chat, r_user, "…", None, None
+                                    )
+                                    if new_mid:
+                                        _last_bot_message_max[user_id] = {
+                                            "chat_id": r_chat,
+                                            "user_id": r_user,
+                                            "mid": new_mid,
+                                        }
+                                continue
+                            if user_id in _pending_admin_delete_search_max:
+                                _pending_admin_delete_search_max.pop(user_id, None)
+                                from config import is_channel_admin
+                                from user_storage import search_users_by_fio
+                                if not is_channel_admin("max", user_id):
+                                    response = handle_main_menu(user_id)
+                                else:
+                                    inp = (text or "").strip()
+                                    if not inp:
+                                        response = {"text": "Введите часть ФИО для поиска.", "parse_mode": "HTML", "buttons": [{"id": "admin_del_back_choice", "label": "🔙 К выбору способа"}], "_set_pending_admin_search": True}
+                                    else:
+                                        matches = search_users_by_fio(inp, limit=20)
+                                        if not matches:
+                                            response = {"text": f"По запросу «{inp}» никого не найдено. Введите другую часть ФИО или нажмите «К выбору способа».", "parse_mode": "HTML", "buttons": [{"id": "admin_del_back_choice", "label": "🔙 К выбору способа"}], "_set_pending_admin_search": True}
+                                        else:
+                                            buttons = []
+                                            for uid, profile in matches:
+                                                name = (profile.get("full_name") or "—").strip() or "—"
+                                                login = (profile.get("login") or "").strip() or "—"
+                                                label = f"{name} ({login})" if len(f"{name} ({login})") <= 40 else f"{name[:28]}… ({login})"
+                                                buttons.append({"id": f"admin_del_uid_{uid}", "label": label})
+                                            buttons.append({"id": "admin_del_back_choice", "label": "🔙 К выбору способа"})
+                                            response = {"text": f"Найдено по «{inp}»: {len(matches)}. Выберите пользователя для удаления:", "parse_mode": "HTML", "buttons": buttons}
+                            elif user_id in _pending_admin_delete_max:
+                                _pending_admin_delete_max.pop(user_id, None)
+                                from config import is_channel_admin
+                                from user_storage import delete_user, get_user_profile, find_by_login, resolve_channel_user_id
+                                if not is_channel_admin("max", user_id):
+                                    response = handle_main_menu(user_id)
+                                elif not (text or "").strip():
+                                    response = {"text": "Введите Telegram ID или логин пользователя для удаления.", "parse_mode": "HTML", "buttons": [{"id": "admin_panel", "label": "🔙 В админ-панель"}], "_set_pending_admin_delete": True}
+                                elif (text or "").strip().lower() in ("отмена", "cancel", "/cancel"):
+                                    response = handle_callback("admin_panel", user_id)
+                                    if response is None:
+                                        response = handle_main_menu(user_id)
+                                else:
+                                    inp = (text or "").strip()
+                                    primary_id = None
+                                    if inp.isdigit():
+                                        uid = int(inp)
+                                        profile = get_user_profile(uid, "max")
+                                        if profile is not None:
+                                            primary_id = resolve_channel_user_id("max", uid)
+                                    else:
+                                        primary_id = find_by_login(inp)
+                                    if primary_id is None:
+                                        response = {"text": "Пользователь не найден. Введите Telegram ID (число) или рабочий логин.", "parse_mode": "HTML", "buttons": [{"id": "admin_panel", "label": "🔙 В админ-панель"}], "_set_pending_admin_delete": True}
+                                    else:
+                                        profile = get_user_profile(primary_id)
+                                        deleted = delete_user(primary_id)
+                                        if deleted:
+                                            response = {"text": f"✅ Пользователь удалён: {profile.get('full_name', '—')} ({profile.get('login', '—')}, ID {primary_id}).", "parse_mode": "HTML", "buttons": [{"id": "admin_panel", "label": "🔙 В админ-панель"}]}
+                                            logger.info("MAX админ %s удалил пользователя %s (%s)", user_id, primary_id, profile.get("login"))
+                                        else:
+                                            response = {"text": "Не удалось удалить пользователя.", "parse_mode": "HTML", "buttons": [{"id": "admin_panel", "label": "🔙 В админ-панель"}]}
+                            elif user_id in _pending_comment_max:
+                                issue_key = _pending_comment_max.pop(user_id, None)
+                                if (text or "").strip().lower() in ("отмена", "cancel", "/cancel"):
+                                    response = handle_main_menu(user_id)
+                                elif issue_key and (text or "").strip():
+                                    from core.jira_aa import add_comment as jira_add_comment
+                                    from user_storage import get_user_profile
+                                    profile = get_user_profile(user_id, "max") or {}
+                                    full_name = (profile.get("full_name") or "").strip() or "Пользователь"
+                                    comment_body = f"[{full_name}] {(text or '').strip()}"
+                                    ok = await jira_add_comment(issue_key, comment_body)
+
+                                    # Вложения из сообщения (если есть): добавляем к заявке
+                                    added_files = 0
+                                    if ok and attachment_list:
+                                        import tempfile
+                                        import os as _os
+                                        from core.jira_wms import add_attachments_to_issue
+
+                                        temp_paths: list[str] = []
+                                        try:
+                                            for att in attachment_list[:10]:
+                                                if not isinstance(att, dict) or not att.get("url"):
+                                                    continue
+                                                downloaded = await _download_attachment_max(bot, att)
+                                                if not downloaded:
+                                                    continue
+                                                content, name = downloaded
+                                                ext = _os.path.splitext(name)[1] if name and "." in name else ".bin"
+                                                f = tempfile.NamedTemporaryFile(delete=False, suffix=ext, prefix="comment_")
+                                                f.write(content)
+                                                f.close()
+                                                temp_paths.append(f.name)
+                                            if temp_paths:
+                                                added_files, _ = await add_attachments_to_issue(issue_key, temp_paths)
+                                                logger.info("MAX comment: к заявке %s добавлено вложений: %s", issue_key, added_files)
+                                        finally:
+                                            for p in temp_paths:
+                                                try:
+                                                    _os.unlink(p)
+                                                except Exception:
+                                                    pass
+
+                                    suffix = f" (вложений: {added_files})" if ok and added_files else ""
+                                    response = {
+                                        "text": (f"✅ Комментарий добавлен к заявке {issue_key}{suffix}."
+                                                 if ok else "❌ Не удалось добавить комментарий."),
+                                        "parse_mode": "HTML",
+                                        "buttons": [{"id": "back_to_main", "label": "🔙 В главное меню"}],
+                                    }
+                                else:
+                                    _pending_comment_max[user_id] = issue_key
+                                    response = {"text": "Введите текст комментария или нажмите Отмена.", "parse_mode": "HTML", "buttons": [{"id": "cancel", "label": "❌ Отмена"}]}
+                            elif user_id in _pending_bind_max:
+                                del _pending_bind_max[user_id]
+                                ok, msg = bind_account_by_phone(user_id, text, "max")
+                                response = {"text": f"✅ {msg}" if ok else f"❌ {msg}", "parse_mode": "HTML", "buttons": []}
+                                if ok:
+                                    response["buttons"] = [{"id": "back_to_main", "label": "◀️ В главное меню"}]
+                            elif user_id in _pending_password_max:
+                                _pending_password_max.pop(user_id, None)
+                                if (text or "").strip().lower() in ("отмена", "cancel", "/cancel"):
+                                    response = handle_main_menu(user_id)
+                                else:
+                                    from core.password import request_password_change
+                                    ok, msg = await request_password_change(user_id, (text or "").strip(), "max")
+                                    response = {"text": f"✅ {msg}" if ok else f"❌ {msg}", "parse_mode": "HTML", "buttons": [{"id": "back_to_main", "label": "🔙 В главное меню"}]}
+                            elif wms_flow.is_in_wms_flow(user_id):
+                                state = getattr(wms_flow, "_flow", {}).get(user_id, {})
+                                if state.get("step") == "attachments" and isinstance(raw_msg, dict):
+                                    body = raw_msg.get("body") or raw_msg
+                                    logger.info(
+                                        "MAX WMS attachments: message keys=%s, body keys=%s, attachment_list len=%s",
+                                        list(raw_msg.keys()),
+                                        list(body.keys()) if isinstance(body, dict) else type(body).__name__,
+                                        len(attachment_list) if attachment_list else 0,
+                                    )
+                                response = await wms_flow.handle_wms_message(user_id, text, attachment_list=attachment_list)
+                                if response is None:
+                                    response = {"text": "Используйте кнопки или /start.", "parse_mode": "HTML", "buttons": [{"id": "cancel", "label": "❌ Отмена"}]}
+                                elif response.get("create_ticket"):
+                                    ct = response["create_ticket"]
+                                    form_data = ct.get("form_data", {})
+                                    attachment_tokens = ct.get("attachment_tokens") or []
+                                    ticket_type_id = ct.get("ticket_type_id") or "wms_issue"
+                                    import tempfile
+                                    import os as _os
+                                    temp_paths = []
+                                    try:
+                                        for att in attachment_tokens[:10]:
+                                            if not isinstance(att, dict) or not att.get("url"):
+                                                continue
+                                            downloaded = await _download_attachment_max(bot, att)
+                                            if downloaded:
+                                                content, name = downloaded
+                                                ext = _os.path.splitext(name)[1] if name and "." in name else ".bin"
+                                                f = tempfile.NamedTemporaryFile(delete=False, suffix=ext, prefix="wms_")
+                                                f.write(content)
+                                                f.close()
+                                                temp_paths.append(f.name)
+                                        if ticket_type_id == "wms_settings":
+                                            success, issue_key, user_msg = await support_api.create_ticket("max", user_id, ticket_type_id, form_data, attachment_paths=temp_paths)
+                                        else:
+                                            success, issue_key, user_msg = await support_api.create_ticket("max", user_id, ticket_type_id, form_data)
+                                            if success and issue_key and temp_paths:
+                                                from core.jira_wms import add_attachments_to_issue
+                                                added, _ = await add_attachments_to_issue(issue_key, temp_paths)
+                                                logger.info("MAX WMS: к заявке %s добавлено вложений: %s", issue_key, added)
+                                        if ticket_type_id != "wms_settings" and attachment_tokens and not temp_paths:
+                                            logger.warning("MAX WMS: вложений было %s, скачано 0", len(attachment_tokens))
+                                    finally:
+                                        for p in temp_paths:
+                                            try:
+                                                _os.unlink(p)
+                                            except Exception:
+                                                pass
+                                    msg_show = user_msg if success else issue_key
+                                    response = {"text": f"✅ {msg_show}" if success else f"❌ {msg_show}", "parse_mode": "HTML", "buttons": [{"id": "back_to_main", "label": "🔙 В главное меню"}]}
+                            elif lupa_flow.is_in_lupa_flow(user_id):
+                                response = await lupa_flow.handle_lupa_message(user_id, text)
+                                if response is None:
+                                    response = {"text": "Используйте кнопки или /start.", "parse_mode": "HTML", "buttons": [{"id": "cancel", "label": "❌ Отмена"}]}
+                                elif response.get("create_ticket"):
+                                    ct = response["create_ticket"]
+                                    form_data = ct.get("form_data", {})
+                                    ticket_type_id = ct.get("ticket_type_id") or "lupa_search"
+                                    success, issue_key, user_msg = await support_api.create_ticket("max", user_id, ticket_type_id, form_data)
+                                    msg_show = user_msg if success else issue_key
+                                    response = {"text": f"✅ {msg_show}" if success else f"❌ {msg_show}", "parse_mode": "HTML", "buttons": [{"id": "back_to_main", "label": "🔙 В главное меню"}]}
+                            else:
+                                response = {"text": "Используйте /start для начала.", "parse_mode": "HTML", "buttons": []}
                     else:
                         continue
 

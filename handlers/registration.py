@@ -185,7 +185,7 @@ async def process_phone_contact(message: Message, state: FSMContext):
         await state.clear()
         return
 
-    success, msg = register_user(
+    success, msg = await register_user(
         user_id=message.from_user.id,
         full_name=full_name,
         login=login,

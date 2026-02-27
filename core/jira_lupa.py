@@ -94,6 +94,7 @@ async def create_lupa_issue(
     request_type: Optional[str] = None,
     subdivision: Optional[str] = None,
     city: Optional[str] = None,
+    jira_username: Optional[str] = None,
 ) -> Tuple[bool, str]:
     """
     Создаёт заявку (Incident) в проекте WHD.
@@ -160,6 +161,13 @@ async def create_lupa_issue(
                     data = await resp.json()
                     issue_key = data.get("key", "")
                     logger.info("Lupa заявка создана: %s", issue_key)
+                    # Пытаемся сменить автора на jira_username (если настроен)
+                    if jira_username:
+                        try:
+                            from core.jira_aa import _set_reporter  # type: ignore[attr-defined]
+                            await _set_reporter(base_url, token, issue_key, jira_username)
+                        except Exception as e:
+                            logger.warning("Lupa: не удалось изменить автора для %s на %s: %s", issue_key, jira_username, e)
                     return True, issue_key
                 text = await resp.text()
                 logger.warning("Lupa создание заявки: HTTP %s %s", resp.status, text[:500])

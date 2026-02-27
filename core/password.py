@@ -6,7 +6,7 @@ import logging
 from typing import Tuple, Optional
 
 from user_storage import get_user_profile
-from core.jira_aa import create_password_change_issue
+from core.jira_aa import create_password_change_issue, _set_reporter  # type: ignore[attr-defined]
 from validators import normalize_phone_for_jira
 
 logger = logging.getLogger(__name__)
@@ -45,6 +45,19 @@ async def request_password_change(
     )
     if result and result.get("key"):
         key = result["key"]
+        # Пытаемся поменять автора на пользователя, который инициировал запрос (если есть jira_username)
+        jira_username = (profile.get("jira_username") or "").strip()
+        if jira_username:
+            from config import CONFIG as _CONFIG
+
+            jira_cfg = _CONFIG.get("JIRA", {})
+            base_url = (jira_cfg.get("LOGIN_URL") or "").strip().rstrip("/")
+            token = (jira_cfg.get("TOKEN") or "").strip()
+            if base_url and token:
+                try:
+                    await _set_reporter(base_url, token, key, jira_username)
+                except Exception as e:
+                    logger.warning("Не удалось изменить автора для %s на %s: %s", key, jira_username, e)
         from core.password_requests import add_pending
         add_pending(key, user_id, channel_id)
         try:

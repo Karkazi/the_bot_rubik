@@ -22,7 +22,63 @@ from validators import (
 logger = logging.getLogger(__name__)
 
 
-def register_user(
+async def _enrich_profile_with_jira_username(profile: dict) -> dict:
+    """
+    Если у пользователя есть email и jira-токен, пытаемся найти соответствующего пользователя в Jira
+    и записать его логин (name/key) в поле jira_username.
+    """
+    email = (profile.get("email") or "").strip()
+    if not email:
+        return profile
+    from config import CONFIG
+
+    jira = CONFIG.get("JIRA", {})
+    base_url = (jira.get("LOGIN_URL") or "").strip().rstrip("/")
+    token = (jira.get("TOKEN") or "").strip()
+    if not base_url or not token:
+        return profile
+
+    import aiohttp
+    from urllib.parse import urljoin, quote
+
+    headers = {"Accept": "application/json", "Authorization": f"Bearer {token}"}
+    search_paths = [
+        f"rest/api/2/user/search?query={quote(email)}",
+        f"rest/api/2/user/search?username={quote(email)}",
+    ]
+    try:
+        async with aiohttp.ClientSession() as session:
+            jira_user = None
+            for rel in search_paths:
+                url = urljoin(base_url + "/", rel)
+                try:
+                    async with session.get(url, headers=headers, timeout=10) as resp:
+                        if resp.status != 200:
+                            continue
+                        data = await resp.json()
+                        if isinstance(data, list) and data:
+                            # Ищем точное совпадение по emailAddress
+                            for u in data:
+                                jira_email = (u.get("emailAddress") or "").strip().lower()
+                                if jira_email == email.lower():
+                                    jira_user = u
+                                    break
+                            if not jira_user:
+                                jira_user = data[0]
+                            break
+                except Exception:
+                    continue
+            if jira_user:
+                jira_name = (jira_user.get("name") or jira_user.get("key") or "").strip()
+                if jira_name:
+                    profile["jira_username"] = jira_name
+    except Exception:
+        # Не считаем ошибку критичной для регистрации
+        return profile
+    return profile
+
+
+async def register_user(
     user_id: int,
     full_name: str,
     login: str,
@@ -61,6 +117,8 @@ def register_user(
     }
     if department and department.strip():
         profile["department"] = department.strip()
+    # Пытаемся обогатить профиль jira_username (если есть соответствие в Jira)
+    profile = await _enrich_profile_with_jira_username(profile)
     save_user_profile(user_id, profile)
     logger.info("Пользователь %s зарегистрирован: %s", user_id, login)
     return True, "Регистрация завершена."
