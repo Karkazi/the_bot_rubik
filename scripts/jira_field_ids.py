@@ -2,7 +2,7 @@
 Печатает ID полей Jira по их названию.
 
 Использование (PowerShell):
-  cd C:\\Users\\m.korolev\\PycharmProjects\\the_bot_rubik
+  cd C:\\path\\to\\the_bot_rubik
   pip install -r requirements.txt
   python scripts\\jira_field_ids.py --query "AD account" --query "Existing phone number" --query "Password_new"
 
