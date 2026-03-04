@@ -75,6 +75,12 @@ class BindAccountStates(StatesGroup):
     WAITING_FOR_CONTACT = State()
 
 
+class AdRegistrationStates(StatesGroup):
+    """Регистрация через AD: рабочая почта → контакт (телефон) → поиск в AD по телефону."""
+    WAITING_FOR_EMAIL = State()
+    WAITING_FOR_CONTACT = State()
+
+
 class TpSectionStates(StatesGroup):
     """Выбор раздела «Создать заявку в ТП»: запрос department_wms или employee_id при необходимости."""
     WAITING_WMS_DEPARTMENT = State()

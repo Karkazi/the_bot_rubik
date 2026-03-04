@@ -89,6 +89,6 @@ def migrate_from_wms(wms_path: Path) -> None:
 
 
 if __name__ == "__main__":
-    default_path = Path(r"C:\Users\m.korolev\PycharmProjects\the_bot_wms\data\registration_requests.json")
+    default_path = Path("/root/the_bot_wms/data/registration_requests.json")
     migrate_from_wms(default_path)
 

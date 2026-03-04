@@ -174,3 +174,34 @@ def update_credentials(
 def get_profile_for_edit(user_id: int) -> Optional[Dict[str, Any]]:
     """Возвращает профиль для отображения/редактирования или None."""
     return get_user_profile(user_id)
+
+
+def register_user_from_ad(
+    user_id: int, profile: Dict[str, Any]
+) -> Tuple[bool, str]:
+    """
+    Регистрирует пользователя по профилю из AD (без проверки дубликатов по логину/почте;
+    вызывающий код должен сам проверить check_login_or_email_taken при необходимости).
+    Возвращает (успех, сообщение).
+    """
+    full_name = (profile.get("full_name") or "").strip()
+    login = (profile.get("login") or "").strip().lower()
+    email = (profile.get("email") or "").strip().lower()
+    phone = (profile.get("phone") or "").strip()
+    if not all([full_name, login, email, phone]):
+        return False, "Неполный профиль из AD."
+    taken, taken_msg = check_login_or_email_taken(login, email, exclude_user_id=user_id)
+    if taken:
+        return False, "Этот аккаунт уже зарегистрирован в боте. Используйте «Привязать аккаунт» с номера телефона этого сотрудника."
+    profile_to_save = {
+        "full_name": full_name,
+        "login": login,
+        "email": email,
+        "phone": phone,
+    }
+    if profile.get("department"):
+        profile_to_save["department"] = (profile["department"] or "").strip()
+    # Обогащение jira_username выполняется асинхронно — вызывающий код может вызвать _enrich_profile_with_jira_username после save
+    save_user_profile(user_id, profile_to_save)
+    logger.info("Пользователь %s зарегистрирован из AD: %s", user_id, login)
+    return True, "Регистрация завершена."

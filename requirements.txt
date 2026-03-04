@@ -5,6 +5,7 @@ PyYAML>=6.0
 openpyxl>=3.1
 python-dotenv>=1.0
 requests>=2.31
+ldap3>=2.9
 # Для бота в MAX (при наличии MAX_BOT_TOKEN в .env)
 # maxapi — /showracemenu с картинкой через InputMedia(path=...). При установленном maxapi он используется первым.
 maxapi>=0.9

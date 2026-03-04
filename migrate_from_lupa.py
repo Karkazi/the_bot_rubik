@@ -55,6 +55,6 @@ def migrate_from_lupa(lupa_path: Path) -> None:
 
 
 if __name__ == "__main__":
-    default_path = Path(r"C:\Users\m.korolev\PycharmProjects\the_bot_lupa\data\user_data.json")
+    default_path = Path("/root/the_bot_lupa/data/user_data.json")
     migrate_from_lupa(default_path)
 

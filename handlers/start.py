@@ -9,6 +9,7 @@ from pathlib import Path
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, FSInputFile
 from aiogram.fsm.context import FSMContext
+from aiogram.filters import StateFilter
 from aiogram.filters import Command
 
 from user_storage import is_user_registered, bind_account_by_phone, needs_phone_verification_channel, update_phone_and_mark_verified_channel
@@ -130,8 +131,8 @@ WELCOME_UNREGISTERED = (
 )
 
 
-@router.message(F.text)
-async def welcome_unregistered(message: Message):
+@router.message(StateFilter(None), F.text)
+async def welcome_unregistered(message: Message, state: FSMContext):
     if is_user_registered(message.from_user.id):
         return
     text = (message.text or "").strip()

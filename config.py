@@ -185,6 +185,15 @@ def load_config() -> Dict[str, Any]:
                 ["Санкт-Петербург", "Москва", "Екатеринбург", "Великий Новгород", "Казань", "Нижний Новгород", "Краснодар", "Челябинск", "Самара", "Уфа"],
             ),
         },
+        # AD/LDAP: проверка сотрудника при регистрации (поиск по телефону)
+        "AD_LDAP": {
+            "URL": (os.getenv("AD_LDAP_URL") or "ldaps://std-ad01.stdp.ru:636").strip(),
+            "BIND_USER": (os.getenv("AD_LDAP_BIND_USER") or "").strip(),  # например m.korolev@stdp.ru или CN=...
+            "BIND_PASSWORD": (os.getenv("AD_LDAP_BIND_PASSWORD") or "").strip(),
+            "BASE_DN": (os.getenv("AD_LDAP_BASE_DN") or "OU=Office_Users,OU=PTech,OU=stdp,DC=stdp,DC=ru").strip(),
+            "VERIFY_SSL": os.getenv("AD_LDAP_VERIFY_SSL", "0").strip().lower() not in ("0", "false", "no", "off"),
+        },
+        "SUPPORT_PORTAL_URL": (os.getenv("SUPPORT_PORTAL_URL") or "").strip(),
     }
     # Алиасы для обратной совместимости (JIRA_PW / JIRA_WHD)
     config["JIRA_PW"] = {"PROJECT_KEY": config["JIRA_WMS"]["PROJECT_KEY"], "SERVICE_DESK_ID": config["JIRA_WMS"]["SERVICE_DESK_ID"]}

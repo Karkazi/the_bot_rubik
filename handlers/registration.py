@@ -1,13 +1,14 @@
 """
-Обработчики регистрации: пошаговый ввод ФИО, логина, почты, телефона.
-При дубликате логина/почты — сообщение «такой пользователь уже существует, обратитесь на первую линию».
+Обработчики регистрации.
+Режим AD: почта → контакт (телефон) → поиск в AD по телефону → доступ или ссылка на портал ТП.
 """
+import asyncio
 import logging
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 
-from states import RegistrationStates
+from states import RegistrationStates, AdRegistrationStates
 from keyboards import (
     get_main_menu_keyboard,
     get_start_keyboard,
@@ -23,24 +24,141 @@ from validators import (
     validate_phone,
     normalize_phone_display,
 )
-from core.registration import register_user
-from user_storage import check_login_or_email_taken
+from core.registration import register_user, register_user_from_ad, _enrich_profile_with_jira_username
+from user_storage import check_login_or_email_taken, get_user_profile, save_user_profile
+from config import CONFIG
 
 logger = logging.getLogger(__name__)
 router = Router()
 
 
+def _support_portal_message() -> str:
+    url = (CONFIG.get("SUPPORT_PORTAL_URL") or "").strip()
+    if url:
+        return (
+            "❌ В базе сотрудников (AD) по этому номеру телефона никого не найдено.\n\n"
+            "Обратитесь в службу поддержки через портал:\n"
+            f"<a href=\"{url}\">{url}</a>"
+        )
+    return (
+        "❌ В базе сотрудников (AD) по этому номеру телефона никого не найдено.\n\n"
+        "Обратитесь в службу поддержки (ссылку на портал уточните у администратора)."
+    )
+
+
 @router.callback_query(lambda c: c.data == "start_registration")
 async def start_registration(callback: CallbackQuery, state: FSMContext):
+    """Старт регистрации через AD: шаг 1 — рабочая почта."""
     await state.clear()
     await callback.message.edit_text(
         "📝 <b>Регистрация</b>\n\n"
-        "Шаг 1/5: Введите ваше <b>ФИО</b> только кириллицей (русские буквы, пробелы и дефис):",
+        "Шаг 1/2: Введите вашу <b>рабочую почту</b> (@petrovich.ru или @petrovich.tech):",
         parse_mode="HTML",
         reply_markup=get_cancel_keyboard(),
     )
-    await state.set_state(RegistrationStates.WAITING_FOR_FULL_NAME)
+    await state.set_state(AdRegistrationStates.WAITING_FOR_EMAIL)
     await callback.answer()
+
+
+@router.message(AdRegistrationStates.WAITING_FOR_EMAIL, F.text)
+async def process_ad_email(message: Message, state: FSMContext):
+    text = (message.text or "").strip()
+    ok, err = validate_corporate_email(text)
+    if not ok:
+        await message.reply(f"❗ {err}\n\nПопробуйте снова или нажмите Отмена.", reply_markup=get_cancel_keyboard())
+        return
+    email_lower = text.lower()
+    await state.update_data(email=email_lower)
+    await state.set_state(AdRegistrationStates.WAITING_FOR_CONTACT)
+    await message.reply(
+        "✅ Почта сохранена.\n\n"
+        "Шаг 2/2: Поделитесь номером телефона — нажмите кнопку ниже (так мы проверим вас в базе сотрудников):",
+        parse_mode="HTML",
+        reply_markup=get_contact_request_keyboard(),
+    )
+
+
+@router.message(AdRegistrationStates.WAITING_FOR_CONTACT, F.contact)
+async def process_ad_contact(message: Message, state: FSMContext):
+    contact = message.contact
+    if not contact or contact.user_id != message.from_user.id:
+        await message.reply(
+            "❌ Пожалуйста, поделитесь именно своим контактом (кнопка «Поделиться контактом»).",
+            reply_markup=get_contact_request_keyboard(),
+        )
+        return
+    raw_phone = (contact.phone_number or "").strip()
+    if not raw_phone:
+        await message.reply(
+            "❌ Не удалось получить номер из контакта. Попробуйте ещё раз.",
+            reply_markup=get_contact_request_keyboard(),
+        )
+        return
+    ok, err = validate_phone(raw_phone)
+    if not ok:
+        await message.reply(
+            f"❗ {err}\n\nПоделитесь контактом снова или нажмите Отмена.",
+            reply_markup=get_contact_request_keyboard(),
+        )
+        return
+    phone_norm = normalize_phone_display(raw_phone)
+    data = await state.get_data()
+    email_entered = (data.get("email") or "").strip().lower()
+    await state.clear()
+
+    # Поиск в AD по телефону (синхронный ldap3 — в потоке)
+    from core.ad_ldap import search_user_by_phone
+    profile = await asyncio.to_thread(search_user_by_phone, raw_phone)
+    if not profile:
+        await message.reply(
+            _support_portal_message(),
+            parse_mode="HTML",
+            reply_markup=remove_reply_keyboard(),
+        )
+        await message.reply("Начните заново:", reply_markup=get_start_keyboard(message.from_user.id))
+        return
+    # Проверка: почта из AD должна совпадать с введённой (игнорируем регистр)
+    if email_entered and profile.get("email") and (profile["email"].lower() != email_entered):
+        await message.reply(
+            "❌ Почта, которую вы ввели, не совпадает с записью в базе сотрудников по этому номеру телефона. "
+            "Проверьте почту или поделитесь контактом с правильного номера.",
+            reply_markup=remove_reply_keyboard(),
+        )
+        await message.reply("Начните заново:", reply_markup=get_start_keyboard(message.from_user.id))
+        return
+    success, msg = register_user_from_ad(message.from_user.id, profile)
+    if not success:
+        await message.reply(msg, reply_markup=remove_reply_keyboard())
+        await message.reply("Начните заново:", reply_markup=get_start_keyboard(message.from_user.id))
+        return
+    # Обогащение jira_username (асинхронно)
+    try:
+        current = get_user_profile(message.from_user.id)
+        if current:
+            enriched = await _enrich_profile_with_jira_username(dict(current))
+            save_user_profile(message.from_user.id, enriched)
+    except Exception:
+        pass
+    lines = [
+        f"• ФИО: {profile.get('full_name', '')}",
+        f"• Логин: {profile.get('login', '')}",
+        f"• Почта: {profile.get('email', '')}",
+        f"• Телефон: {profile.get('phone', '')}",
+    ]
+    if profile.get("department"):
+        lines.append(f"• Подразделение: {profile['department']}")
+    await message.reply(
+        "✅ <b>Регистрация завершена</b>\n\n"
+        + "\n".join(lines)
+        + "\n\nТеперь вам доступны кнопки «Поменять пароль» и «Поменять учётные данные».",
+        parse_mode="HTML",
+        reply_markup=remove_reply_keyboard(),
+    )
+    await message.reply("Выберите действие:", reply_markup=get_main_menu_keyboard(message.from_user.id))
+
+
+# --- Старый сценарий (5 шагов: ФИО, логин, почта, подразделение, телефон) — оставлен для совместимости,
+#     но не вызывается из start_registration (старт переведён на AD). Можно удалить, если не нужен.
 
 
 @router.message(RegistrationStates.WAITING_FOR_FULL_NAME, F.text)
