@@ -84,7 +84,7 @@ def is_in_lupa_flow(user_id: int) -> bool:
     return user_id in _flow
 
 
-async def _lupa_service_screen() -> dict:
+def _lupa_service_screen() -> dict:
     """Экран выбора сервиса (шаг 1 Lupa)."""
     return {
         "text": "🔍 <b>Создание заявки о поиске</b>\n\nШаг 1/5: Выберите проблемный сервис:",
@@ -136,7 +136,7 @@ async def start_lupa(user_id: int) -> Optional[dict]:
             "buttons": _buttons_lupa_departments(depts, 0),
         }
     _flow[user_id] = {"step": "service", "data": {"ticket_type_id": "lupa_search"}}
-    return await _lupa_service_screen()
+    return _lupa_service_screen()
 
 
 def handle_lupa_callback(user_id: int, callback_id: str) -> Optional[dict]:
@@ -183,7 +183,7 @@ def handle_lupa_callback(user_id: int, callback_id: str) -> Optional[dict]:
             state["step"] = "service"
             state["data"] = data
             _flow[user_id] = state
-            return await _lupa_service_screen()
+            return _lupa_service_screen()
 
     # Шаг 1: выбор сервиса
     if step == "service" and callback_id in LUPA_SERVICE_VALUES:
@@ -311,7 +311,7 @@ async def handle_lupa_message(user_id: int, text: str) -> Optional[dict]:
                 "buttons": _buttons_lupa_departments(depts, 0),
             }
         _flow[user_id] = {"step": "service", "data": {**data}}
-        return await _lupa_service_screen()
+        return _lupa_service_screen()
 
     if step == "city_manual":
         if not text_val:
