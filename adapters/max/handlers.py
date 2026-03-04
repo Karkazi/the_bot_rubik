@@ -111,11 +111,8 @@ def handle_callback(callback_id: str, user_id: int, my_tickets: Optional[list] =
             ],
         }
     if callback_id == "start_registration":
-        return {
-            "text": "Регистрация доступна в Telegram. Откройте бота в Telegram и нажмите «Зарегистрироваться».",
-            "parse_mode": "HTML",
-            "buttons": back_btn,
-        }
+        # Обрабатывается в main_max: задаётся состояние и первый шаг (email)
+        return None
     # Главное меню (для зарегистрированных)
     if callback_id == "create_ticket_tp":
         result = support_api.get_ticket_types_menu(CHANNEL_ID, user_id)

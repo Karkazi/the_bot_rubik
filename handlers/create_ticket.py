@@ -129,36 +129,74 @@ async def tp_wms_department_select(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+async def _lupa_start_or_ask_department(callback_or_message, state: FSMContext, is_callback: bool):
+    """Если в профиле нет подразделения — показать выбор из Jira и сохранить; иначе — шаг 1 Lupa (сервис)."""
+    user_id = callback_or_message.from_user.id
+    profile = get_user_profile(user_id) or {}
+    department = (profile.get("department") or "").strip()
+    if department:
+        await state.clear()
+        await state.set_state(LupaTicketStates.SELECT_PROBLEMATIC_SERVICE)
+        await state.update_data(ticket_type_id="lupa_search")
+        text = "🔍 <b>Создание заявки о поиске</b>\n\nШаг 1/5: Выберите проблемный сервис:"
+        if is_callback:
+            await callback_or_message.message.edit_text(text, parse_mode="HTML", reply_markup=get_lupa_service_keyboard())
+            await callback_or_message.answer()
+        else:
+            await callback_or_message.reply(text, parse_mode="HTML", reply_markup=get_lupa_service_keyboard())
+        return
+    from core.jira_departments import get_departments_async
+    from keyboards import get_department_keyboard
+    depts = await get_departments_async()
+    await state.clear()
+    await state.set_state(LupaTicketStates.WAITING_FOR_DEPARTMENT)
+    await state.update_data(ticket_type_id="lupa_search", tp_lupa_departments_list=depts)
+    if not depts:
+        if is_callback:
+            await callback_or_message.message.edit_text(
+                "Список подразделений недоступен. Попробуйте позже или укажите подразделение в Личном кабинете.",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="🔙 В главное меню", callback_data="back_to_main")],
+                ]),
+            )
+            await callback_or_message.answer()
+        else:
+            await callback_or_message.reply(
+                "Список подразделений недоступен. Попробуйте позже или укажите подразделение в Личном кабинете.",
+                reply_markup=get_main_menu_keyboard(user_id),
+            )
+        return
+    msg_text = "🔍 <b>Создание заявки о поиске (Lupa)</b>\n\nВыберите ваше подразделение (оно будет сохранено в профиль):"
+    if is_callback:
+        await callback_or_message.message.edit_text(msg_text, parse_mode="HTML", reply_markup=get_department_keyboard(departments=depts))
+        await callback_or_message.answer()
+    else:
+        await callback_or_message.reply(msg_text, parse_mode="HTML", reply_markup=get_department_keyboard(departments=depts))
+
+
 @router.callback_query(lambda c: c.data == "tp_section_site")
 async def tp_section_site(callback: CallbackQuery, state: FSMContext):
-    """Сайт (Lupa): если нет employee_id — запросить табельный; иначе шаг 1 — выбор сервиса (кнопки, как the_bot_lupa)."""
+    """Сайт (Lupa): если нет employee_id — запросить табельный; иначе подразделение (если нет) → выбор сервиса."""
     if not is_user_registered(callback.from_user.id):
         await callback.answer("Сначала пройдите регистрацию.", show_alert=True)
         return
     profile = get_user_profile(callback.from_user.id) or {}
     employee_id = (profile.get("employee_id") or "").strip()
-    if employee_id:
+    if not employee_id:
+        hint = (
+            "💡 <i>Табельный номер можно найти в расчётном листке. "
+            "Он нужен для идентификации в заявке.</i>"
+        )
         await state.clear()
-        await state.set_state(LupaTicketStates.SELECT_PROBLEMATIC_SERVICE)
-        await state.update_data(ticket_type_id="lupa_search")
+        await state.set_state(TpSectionStates.WAITING_EMPLOYEE_ID)
         await callback.message.edit_text(
-            "🔍 <b>Создание заявки о поиске</b>\n\nЛупа начинает! Шаг 1/5: Выберите проблемный сервис:",
+            f"🌐 <b>Сайт (Lupa)</b>\n\nУкажите ваш <b>табельный номер</b> (например: 0000000311):\n\n{hint}",
             parse_mode="HTML",
-            reply_markup=get_lupa_service_keyboard(),
+            reply_markup=get_cancel_keyboard(),
         )
         await callback.answer()
         return
-    hint = (
-        "💡 <i>Табельный номер можно найти в расчётном листке. "
-        "Он нужен для идентификации в заявке.</i>"
-    )
-    await state.set_state(TpSectionStates.WAITING_EMPLOYEE_ID)
-    await callback.message.edit_text(
-        f"🌐 <b>Сайт (Lupa)</b>\n\nУкажите ваш <b>табельный номер</b> (например: 0000000311):\n\n{hint}",
-        parse_mode="HTML",
-        reply_markup=get_cancel_keyboard(),
-    )
-    await callback.answer()
+    await _lupa_start_or_ask_department(callback, state, is_callback=True)
 
 
 EMPLOYEE_ID_HINT = (
@@ -298,14 +336,52 @@ async def tp_employee_id_enter(message: Message, state: FSMContext):
     profile = get_user_profile(message.from_user.id) or {}
     profile["employee_id"] = value
     save_user_profile(message.from_user.id, profile)
-    await state.clear()
+    await _lupa_start_or_ask_department(message, state, is_callback=False)
+
+
+@router.callback_query(LupaTicketStates.WAITING_FOR_DEPARTMENT, F.data.startswith("department_page_"))
+async def lupa_department_page(callback: CallbackQuery, state: FSMContext):
+    """Пагинация списка подразделений для Lupa."""
+    try:
+        page = int(callback.data.replace("department_page_", ""))
+    except ValueError:
+        await callback.answer()
+        return
+    from keyboards import get_department_keyboard
+    data = await state.get_data()
+    depts = data.get("tp_lupa_departments_list") or []
+    await callback.message.edit_reply_markup(reply_markup=get_department_keyboard(departments=depts, page=page))
+    await callback.answer()
+
+
+@router.callback_query(LupaTicketStates.WAITING_FOR_DEPARTMENT, F.data.startswith("department_"))
+async def lupa_department_select(callback: CallbackQuery, state: FSMContext):
+    """Выбор подразделения для Lupa: сохраняем в профиль и переходим к выбору сервиса."""
+    if "department_page_" in callback.data:
+        await callback.answer()
+        return
+    data = await state.get_data()
+    depts = data.get("tp_lupa_departments_list") or []
+    raw = callback.data.replace("department_", "")
+    if not raw.isdigit():
+        await callback.answer()
+        return
+    idx = int(raw)
+    if idx < 0 or idx >= len(depts):
+        await callback.answer("Неверный выбор.", show_alert=True)
+        return
+    value = depts[idx]
+    profile = get_user_profile(callback.from_user.id) or {}
+    profile["department"] = value
+    save_user_profile(callback.from_user.id, profile)
     await state.set_state(LupaTicketStates.SELECT_PROBLEMATIC_SERVICE)
     await state.update_data(ticket_type_id="lupa_search")
-    await message.reply(
-        "🔍 <b>Создание заявки о поиске</b>\n\nЛупа начинает! Шаг 1/5: Выберите проблемный сервис:",
+    await callback.message.edit_text(
+        "🔍 <b>Создание заявки о поиске</b>\n\nШаг 1/5: Выберите проблемный сервис:",
         parse_mode="HTML",
         reply_markup=get_lupa_service_keyboard(),
     )
+    await callback.answer()
 
 
 @router.callback_query(lambda c: c.data == "create_ticket")

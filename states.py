@@ -88,7 +88,8 @@ class TpSectionStates(StatesGroup):
 
 
 class LupaTicketStates(StatesGroup):
-    """Заявка Lupa (как the_bot_lupa): сервис → тип запроса → город → комментарий. Подразделение из профиля."""
+    """Заявка Lupa (как the_bot_lupa): подразделение (если нет в профиле) → сервис → тип запроса → город → комментарий."""
+    WAITING_FOR_DEPARTMENT = State()  # запрос подразделения из Jira, если в профиле пусто
     SELECT_PROBLEMATIC_SERVICE = State()
     SELECT_REQUEST_TYPE = State()
     ENTER_CITY = State()

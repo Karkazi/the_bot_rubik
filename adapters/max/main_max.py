@@ -764,6 +764,9 @@ _pending_admin_delete_search_max: dict[int, bool] = {}
 # Ожидание подтверждения номера телефона (контакт) для мигрированных пользователей
 _pending_verify_phone_max: dict[int, bool] = {}
 
+# Регистрация из MAX: user_id -> {"step": "email" | "contact", "email": "..."}
+_pending_registration_max: dict[int, dict] = {}
+
 # user_id (MAX) -> {chat_id, user_id, mid} последнего сообщения бота (удаляем перед новым ответом, как в on_dute)
 _last_bot_message_max: dict[int, dict] = {}
 
@@ -950,9 +953,21 @@ async def run_max_bot() -> None:
                         if callback_id == "cancel":
                             _pending_password_max.pop(user_id, None)
                             _pending_comment_max.pop(user_id, None)
+                        if callback_id == "back_to_main":
+                            _pending_registration_max.pop(user_id, None)
                         if callback_id == "bind_account":
                             _pending_bind_max[user_id] = True
-                        if callback_id == "ticket_wms_issue":
+                        if callback_id == "start_registration":
+                            _pending_registration_max[user_id] = {"step": "email"}
+                            response = {
+                                "text": (
+                                    "📝 <b>Регистрация</b>\n\n"
+                                    "Шаг 1/2: Введите вашу <b>рабочую почту</b> (@petrovich.ru или @petrovich.tech):"
+                                ),
+                                "parse_mode": "HTML",
+                                "buttons": [{"id": "back_to_main", "label": "◀️ Отмена"}],
+                            }
+                        elif callback_id == "ticket_wms_issue":
                             response = await wms_flow.start_wms(user_id)
                             if response is None:
                                 response = handle_start(user_id)
@@ -1090,7 +1105,73 @@ async def run_max_bot() -> None:
                                 response = handle_start(user_id)
                     elif isinstance(source, tuple) and source[0] == "contact":
                         phone = source[1]
-                        if user_id in _pending_bind_max:
+                        if user_id in _pending_registration_max:
+                            reg = _pending_registration_max.pop(user_id, None)
+                            if reg and reg.get("step") == "contact":
+                                from validators import validate_phone
+                                from core.ad_ldap import search_user_by_phone
+                                from core.registration import register_user_from_ad
+                                from user_storage import get_user_profile, save_user_profile
+                                from config import CONFIG
+                                ok_phone, err_phone = validate_phone(phone or "")
+                                if not ok_phone:
+                                    _pending_registration_max[user_id] = reg
+                                    response = {
+                                        "text": f"❗ {err_phone}\n\nПоделитесь контактом снова.",
+                                        "parse_mode": "HTML",
+                                        "buttons": [
+                                            {"type": "request_contact", "label": "📱 Поделиться контактом"},
+                                            {"id": "back_to_main", "label": "◀️ Отмена"},
+                                        ],
+                                    }
+                                else:
+                                    profile = await asyncio.to_thread(search_user_by_phone, phone)
+                                    if not profile:
+                                        url = (CONFIG.get("SUPPORT_PORTAL_URL") or "").strip()
+                                        response = {
+                                            "text": f"По этому номеру сотрудник не найден в базе. Обратитесь в поддержку: {url}" if url else "По этому номеру сотрудник не найден. Обратитесь в поддержку.",
+                                            "parse_mode": "HTML",
+                                            "buttons": [{"id": "back_to_main", "label": "🔙 В главное меню"}],
+                                        }
+                                    else:
+                                        email_entered = (reg.get("email") or "").strip().lower()
+                                        if email_entered and profile.get("email") and (profile["email"].lower() != email_entered):
+                                            _pending_registration_max[user_id] = reg
+                                            response = {
+                                                "text": "❌ Почта не совпадает с записью в базе по этому номеру. Проверьте почту или поделитесь контактом с правильного номера.",
+                                                "parse_mode": "HTML",
+                                                "buttons": [
+                                                    {"type": "request_contact", "label": "📱 Поделиться контактом"},
+                                                    {"id": "back_to_main", "label": "◀️ Отмена"},
+                                                ],
+                                            }
+                                        else:
+                                            success, msg = register_user_from_ad(user_id, profile)
+                                            if not success:
+                                                response = {"text": f"❌ {msg}", "parse_mode": "HTML", "buttons": [{"id": "back_to_main", "label": "🔙 В главное меню"}]}
+                                            else:
+                                                try:
+                                                    current = get_user_profile(user_id)
+                                                    if current:
+                                                        from core.registration import _enrich_profile_with_jira_username
+                                                        enriched = await _enrich_profile_with_jira_username(dict(current))
+                                                        save_user_profile(user_id, enriched)
+                                                except Exception:
+                                                    pass
+                                                lines = [
+                                                    f"• ФИО: {profile.get('full_name', '')}",
+                                                    f"• Логин: {profile.get('login', '')}",
+                                                    f"• Почта: {profile.get('email', '')}",
+                                                    f"• Телефон: {profile.get('phone', '')}",
+                                                ]
+                                                response = {
+                                                    "text": "✅ <b>Регистрация завершена</b>\n\n" + "\n".join(lines) + "\n\nТеперь доступны кнопки «Поменять пароль» и «Поменять учётные данные».",
+                                                    "parse_mode": "HTML",
+                                                    "buttons": [{"id": "back_to_main", "label": "🔙 В главное меню"}],
+                                                }
+                            else:
+                                response = handle_start(user_id)
+                        elif user_id in _pending_bind_max:
                             del _pending_bind_max[user_id]
                             ok, msg = bind_account_by_phone(user_id, phone, "max")
                             response = {"text": f"✅ {msg}" if ok else f"❌ {msg}", "parse_mode": "HTML", "buttons": []}
@@ -1110,7 +1191,43 @@ async def run_max_bot() -> None:
                     elif isinstance(source, tuple) and source[0] == "message":
                         text = source[1]
                         from user_storage import is_user_registered as _is_user_registered_max
-                        if not _is_user_registered_max(user_id, "max"):
+                        if user_id in _pending_registration_max:
+                            reg = _pending_registration_max[user_id]
+                            if (text or "").strip().lower() in ("отмена", "cancel", "/cancel"):
+                                _pending_registration_max.pop(user_id, None)
+                                response = handle_start(user_id)
+                            elif reg.get("step") == "email":
+                                from validators import validate_corporate_email
+                                ok, err = validate_corporate_email((text or "").strip())
+                                if not ok:
+                                    response = {
+                                        "text": f"❗ {err}\n\nПопробуйте снова или нажмите Отмена.",
+                                        "parse_mode": "HTML",
+                                        "buttons": [{"id": "back_to_main", "label": "◀️ Отмена"}],
+                                    }
+                                else:
+                                    _pending_registration_max[user_id] = {"step": "contact", "email": (text or "").strip().lower()}
+                                    response = {
+                                        "text": (
+                                            "✅ Почта сохранена.\n\n"
+                                            "Шаг 2/2: Поделитесь номером телефона — нажмите кнопку ниже (так мы проверим вас в базе сотрудников):"
+                                        ),
+                                        "parse_mode": "HTML",
+                                        "buttons": [
+                                            {"type": "request_contact", "label": "📱 Поделиться контактом"},
+                                            {"id": "back_to_main", "label": "◀️ Отмена"},
+                                        ],
+                                    }
+                            else:
+                                response = {
+                                    "text": "Поделитесь контактом по кнопке ниже.",
+                                    "parse_mode": "HTML",
+                                    "buttons": [
+                                        {"type": "request_contact", "label": "📱 Поделиться контактом"},
+                                        {"id": "back_to_main", "label": "◀️ Отмена"},
+                                    ],
+                                }
+                        elif not _is_user_registered_max(user_id, "max"):
                             response = {
                                 "text": "Привет! Для работы с ботом отправьте команду /start.",
                                 "parse_mode": "HTML",
