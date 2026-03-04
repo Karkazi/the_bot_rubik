@@ -44,6 +44,24 @@ EMPLOYEE_ID_HINT = (
     "💡 Табельный номер можно найти в расчётном листке. Он нужен для идентификации в заявке."
 )
 
+ITEMS_PER_PAGE = 8
+
+
+def _buttons_lupa_departments(departments: list, page: int = 0) -> list:
+    """Кнопки выбора подразделения из Jira (для Lupa) + пагинация + Отмена."""
+    if not departments:
+        return CANCEL_BTN
+    start = page * ITEMS_PER_PAGE
+    end = start + ITEMS_PER_PAGE
+    chunk = departments[start:end]
+    buttons = [{"id": f"lupa_dept_{start + i}", "label": name} for i, name in enumerate(chunk)]
+    if page > 0:
+        buttons.append({"id": f"lupa_dept_page_{page - 1}", "label": "◀️ Назад"})
+    if end < len(departments):
+        buttons.append({"id": f"lupa_dept_page_{page + 1}", "label": "Вперёд ▶️"})
+    buttons.append({"id": "cancel", "label": "❌ Отмена"})
+    return buttons
+
 
 def _city_buttons() -> list:
     """Кнопки городов (первые 4 из конфига) + «Ввести вручную», как the_bot_lupa."""
@@ -66,32 +84,59 @@ def is_in_lupa_flow(user_id: int) -> bool:
     return user_id in _flow
 
 
+async def _lupa_service_screen() -> dict:
+    """Экран выбора сервиса (шаг 1 Lupa)."""
+    return {
+        "text": "🔍 <b>Создание заявки о поиске</b>\n\nШаг 1/5: Выберите проблемный сервис:",
+        "parse_mode": "HTML",
+        "buttons": LUPA_SERVICE_BUTTONS + CANCEL_BTN,
+    }
+
+
 async def start_lupa(user_id: int) -> Optional[dict]:
     """
-    Начало сценария Lupa. Если нет employee_id — запрос табельного; иначе шаг 1 — выбор сервиса (кнопки).
+    Начало сценария Lupa. Если нет employee_id — запрос табельного.
+    Если нет department в профиле — запрос подразделения из Jira (как в TG); иначе шаг 1 — выбор сервиса.
     """
     if not is_user_registered(user_id, CHANNEL_ID):
         return None
     _flow.pop(user_id, None)
     profile = get_user_profile(user_id, CHANNEL_ID) or {}
     employee_id = (profile.get("employee_id") or "").strip()
-    if employee_id:
-        _flow[user_id] = {"step": "service", "data": {"ticket_type_id": "lupa_search"}}
+    if not employee_id:
+        _flow[user_id] = {"step": "employee_id", "data": {"ticket_type_id": "lupa_search"}}
         return {
-            "text": "🔍 <b>Создание заявки о поиске</b>\n\nЛупа начинает! Шаг 1/5: Выберите проблемный сервис:",
+            "text": (
+                "🌐 <b>Сайт (Lupa)</b>\n\n"
+                "Укажите ваш <b>табельный номер</b> (например: 0000000311):\n\n"
+                f"{EMPLOYEE_ID_HINT}"
+            ),
             "parse_mode": "HTML",
-            "buttons": LUPA_SERVICE_BUTTONS + CANCEL_BTN,
+            "buttons": CANCEL_BTN,
         }
-    _flow[user_id] = {"step": "employee_id", "data": {"ticket_type_id": "lupa_search"}}
-    return {
-        "text": (
-            "🌐 <b>Сайт (Lupa)</b>\n\n"
-            "Укажите ваш <b>табельный номер</b> (например: 0000000311):\n\n"
-            f"{EMPLOYEE_ID_HINT}"
-        ),
-        "parse_mode": "HTML",
-        "buttons": CANCEL_BTN,
-    }
+    department = (profile.get("department") or "").strip()
+    if not department:
+        from core.jira_departments import get_departments_async
+        depts = await get_departments_async()
+        if not depts:
+            return {
+                "text": "Список подразделений недоступен. Попробуйте позже или укажите подразделение в Личном кабинете.",
+                "parse_mode": "HTML",
+                "buttons": [{"id": "back_to_main", "label": "🔙 В главное меню"}],
+            }
+        _flow[user_id] = {
+            "step": "department",
+            "data": {"ticket_type_id": "lupa_search"},
+            "departments": depts,
+            "dept_page": 0,
+        }
+        return {
+            "text": "🔍 <b>Создание заявки о поиске (Lupa)</b>\n\nВыберите ваше подразделение (оно будет сохранено в профиль):",
+            "parse_mode": "HTML",
+            "buttons": _buttons_lupa_departments(depts, 0),
+        }
+    _flow[user_id] = {"step": "service", "data": {"ticket_type_id": "lupa_search"}}
+    return await _lupa_service_screen()
 
 
 def handle_lupa_callback(user_id: int, callback_id: str) -> Optional[dict]:
@@ -107,6 +152,38 @@ def handle_lupa_callback(user_id: int, callback_id: str) -> Optional[dict]:
 
     step = state.get("step")
     data = state.get("data", {})
+
+    # Шаг: выбор подразделения (если не было в профиле)
+    if step == "department":
+        if callback_id.startswith("lupa_dept_page_"):
+            try:
+                page = int(callback_id.replace("lupa_dept_page_", ""))
+            except ValueError:
+                return None
+            depts = state.get("departments") or []
+            state["dept_page"] = page
+            return {
+                "text": "🔍 <b>Создание заявки о поиске (Lupa)</b>\n\nВыберите ваше подразделение (оно будет сохранено в профиль):",
+                "parse_mode": "HTML",
+                "buttons": _buttons_lupa_departments(depts, page),
+            }
+        if callback_id.startswith("lupa_dept_") and not callback_id.startswith("lupa_dept_page_"):
+            try:
+                idx = int(callback_id.replace("lupa_dept_", ""))
+            except ValueError:
+                return None
+            depts = state.get("departments") or []
+            if idx < 0 or idx >= len(depts):
+                return None
+            value = depts[idx]
+            primary = resolve_channel_user_id(CHANNEL_ID, user_id)
+            profile = get_user_profile(user_id, CHANNEL_ID) or {}
+            profile["department"] = value
+            save_user_profile(primary, profile)
+            state["step"] = "service"
+            state["data"] = data
+            _flow[user_id] = state
+            return await _lupa_service_screen()
 
     # Шаг 1: выбор сервиса
     if step == "service" and callback_id in LUPA_SERVICE_VALUES:
@@ -211,12 +288,30 @@ async def handle_lupa_message(user_id: int, text: str) -> Optional[dict]:
         profile = get_user_profile(user_id, CHANNEL_ID) or {}
         profile["employee_id"] = text_val
         save_user_profile(primary, profile)
+        department = (profile.get("department") or "").strip()
+        if not department:
+            from core.jira_departments import get_departments_async
+            depts = await get_departments_async()
+            if not depts:
+                _flow[user_id] = {"step": "service", "data": {**data}}
+                return {
+                    "text": "Список подразделений недоступен. Выберите сервис — подразделение можно указать в Личном кабинете.",
+                    "parse_mode": "HTML",
+                    "buttons": LUPA_SERVICE_BUTTONS + CANCEL_BTN,
+                }
+            _flow[user_id] = {
+                "step": "department",
+                "data": {**data},
+                "departments": depts,
+                "dept_page": 0,
+            }
+            return {
+                "text": "🔍 <b>Создание заявки о поиске (Lupa)</b>\n\nВыберите ваше подразделение (оно будет сохранено в профиль):",
+                "parse_mode": "HTML",
+                "buttons": _buttons_lupa_departments(depts, 0),
+            }
         _flow[user_id] = {"step": "service", "data": {**data}}
-        return {
-            "text": "🔍 <b>Создание заявки о поиске</b>\n\nЛупа начинает! Шаг 1/5: Выберите проблемный сервис:",
-            "parse_mode": "HTML",
-            "buttons": LUPA_SERVICE_BUTTONS + CANCEL_BTN,
-        }
+        return await _lupa_service_screen()
 
     if step == "city_manual":
         if not text_val:
