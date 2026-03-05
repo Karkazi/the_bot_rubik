@@ -15,7 +15,6 @@ from config import CONFIG
 from handlers.start import router as start_router
 from handlers.registration import router as registration_router
 from handlers.password import router as password_router
-from handlers.credentials import router as credentials_router
 from handlers.admin import router as admin_router
 from handlers.comments import router as comments_router
 from handlers.my_tickets import router as my_tickets_router
@@ -84,7 +83,6 @@ async def main():
     dp.include_router(start_router)
     dp.include_router(registration_router)
     dp.include_router(password_router)
-    dp.include_router(credentials_router)
     dp.include_router(admin_router)
     dp.include_router(comments_router)
     dp.include_router(my_tickets_router)

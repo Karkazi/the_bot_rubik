@@ -61,7 +61,6 @@ HELP_TEXT = (
     "• <b>Сайт</b> — проблемы с поиском на petrovich.ru\n"
     "• <b>WMS</b> — заявки по настройке и работе складской системы\n"
     "• <b>Смена пароля</b> — запрос смены пароля учётной записи\n\n"
-    "В разделе «Личный кабинет» можно просмотреть и изменить свои учётные данные. "
     "Заявки можно отслеживать в разделе «Мои заявки»."
 )
 
@@ -120,22 +119,6 @@ def handle_callback(callback_id: str, user_id: int, my_tickets: Optional[list] =
             return menu_to_max(result)
         if isinstance(result, Error):
             return error_to_max(result)
-    if callback_id == "personal_cabinet":
-        if not is_user_registered(user_id, CHANNEL_ID):
-            return {"text": "Сначала пройдите регистрацию или привяжите аккаунт.", "parse_mode": "HTML", "buttons": back_btn}
-        profile = get_user_profile(user_id, CHANNEL_ID) or {}
-        lines = [
-            "👤 <b>Личный кабинет</b>",
-            "",
-            f"ФИО: {profile.get('full_name') or '—'}",
-            f"Логин: {profile.get('login') or '—'}",
-            f"Почта: {profile.get('email') or '—'}",
-            f"Телефон: {profile.get('phone') or '—'}",
-            f"Подразделение: {profile.get('department') or '—'}",
-            f"Подразделение WMS: {profile.get('department_wms') or '—'}",
-            f"Табельный номер: {profile.get('employee_id') or '—'}",
-        ]
-        return {"text": "\n".join(lines), "parse_mode": "HTML", "buttons": back_btn}
     if callback_id == "help":
         if not is_user_registered(user_id, CHANNEL_ID):
             return {"text": "Сначала пройдите регистрацию или привяжите аккаунт.", "parse_mode": "HTML", "buttons": back_btn}

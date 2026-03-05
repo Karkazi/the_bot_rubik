@@ -17,11 +17,10 @@ def get_start_keyboard(user_id: int) -> InlineKeyboardMarkup:
 
 
 def get_main_menu_keyboard(user_id: int) -> InlineKeyboardMarkup:
-    """Главное меню: Создать заявку в ТП, Личный кабинет, Помощь (+ админ)."""
+    """Главное меню: Создать заявку в ТП, Мои заявки, Помощь (+ админ)."""
     buttons = [
         [InlineKeyboardButton(text="📋 Создать заявку в ТП", callback_data="create_ticket_tp")],
         [InlineKeyboardButton(text="📋 Мои заявки", callback_data="my_tickets")],
-        [InlineKeyboardButton(text="👤 Личный кабинет", callback_data="personal_cabinet")],
         [InlineKeyboardButton(text="❓ Помощь", callback_data="help")],
     ]
     if user_id and is_admin(user_id):

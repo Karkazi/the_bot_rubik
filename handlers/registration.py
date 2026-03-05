@@ -69,8 +69,12 @@ async def process_ad_email(message: Message, state: FSMContext):
         return
     email_lower = text.lower()
     await state.update_data(email=email_lower)
+    try:
+        await message.delete()
+    except Exception:
+        pass
     await state.set_state(AdRegistrationStates.WAITING_FOR_CONTACT)
-    await message.reply(
+    await message.answer(
         "✅ Почта сохранена.\n\n"
         "Шаг 2/2: Поделитесь номером телефона — нажмите кнопку ниже (так мы проверим вас в базе сотрудников):",
         parse_mode="HTML",

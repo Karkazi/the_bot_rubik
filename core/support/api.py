@@ -45,7 +45,7 @@ def get_start_response(channel_id: str, user_id: int) -> Text | Menu:
 
 def get_main_menu_response(channel_id: str, user_id: int) -> Menu:
     """
-    Главное меню: Создать заявку в ТП, Личный кабинет, Помощь (+ Админ-панель для ADMIN_IDS).
+    Главное меню: Создать заявку в ТП, Мои заявки, Помощь (+ Админ-панель для ADMIN_IDS).
     Единый источник кнопок для Telegram и MAX. Для MAX проверка по привязке max_user_id.
     """
     from user_storage import is_user_registered
@@ -57,7 +57,6 @@ def get_main_menu_response(channel_id: str, user_id: int) -> Menu:
     buttons: List[MenuButton] = [
         MenuButton(id="create_ticket_tp", label="📋 Создать заявку в ТП"),
         MenuButton(id="my_tickets", label="📋 Мои заявки"),
-        MenuButton(id="personal_cabinet", label="👤 Личный кабинет"),
         MenuButton(id="help", label="❓ Помощь"),
     ]
     from config import is_lupa_report_allowed
@@ -200,7 +199,7 @@ async def create_ticket(
             or (profile.get("department_wms") or "").strip()
         )
         if not subdivision:
-            return False, "Укажите подразделение в профиле: Личный кабинет → Подразделение (то, что указывали при регистрации).", None
+            return False, "Укажите подразделение при создании заявки (выберите из списка).", None
         ok, result = await create_lupa_issue(
             description=description,
             problematic_service=(form_data.get("problematic_service") or "Сайт (petrovich.ru)").strip(),

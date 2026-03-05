@@ -1207,6 +1207,18 @@ async def run_max_bot() -> None:
                                     }
                                 else:
                                     _pending_registration_max[user_id] = {"step": "contact", "email": (text or "").strip().lower()}
+                                    try:
+                                        pl = raw.get("payload") or raw
+                                        um = pl.get("message") or pl.get("edited_message")
+                                        if isinstance(um, dict):
+                                            user_mid = um.get("mid") or um.get("message_id") or um.get("id")
+                                            body = um.get("body") or um
+                                            if not user_mid and isinstance(body, dict):
+                                                user_mid = body.get("mid") or body.get("message_id")
+                                            if user_mid:
+                                                await _delete_message_max(bot, r_chat, r_user, str(user_mid))
+                                    except Exception:
+                                        pass
                                     response = {
                                         "text": (
                                             "✅ Почта сохранена.\n\n"
