@@ -222,9 +222,9 @@ def is_password_expired(login: str) -> Optional[bool]:
         conn.unbind()
         attrs = entry.entry_attributes_as_dict
 
-        # 1) Явный флаг PASSWORD_EXPIRED (0x800000) в userAccountControl
+        # Явный флаг PASSWORD_EXPIRED (0x800000) в userAccountControl
+        uac_raw = _get_first(attrs, "userAccountControl")
         try:
-            uac_raw = _get_first(attrs, "userAccountControl")
             uac = int(uac_raw) if uac_raw else 0
         except Exception:
             uac = 0
@@ -232,17 +232,16 @@ def is_password_expired(login: str) -> Optional[bool]:
         if uac & PASSWORD_EXPIRED_FLAG:
             return True
 
-        # 2) Сравнение msDS-UserPasswordExpiryTimeComputed с текущим временем
+        # Сравнение msDS-UserPasswordExpiryTimeComputed с текущим временем
         exp_raw = _get_first(attrs, "msDS-UserPasswordExpiryTimeComputed")
         if not exp_raw:
             return None
-        try:
-            filetime = int(exp_raw)
-            # FILETIME (100-нс тики с 1601-01-01) -> Unix epoch
-            unix_ts = (filetime - 116444736000000000) / 10**7
-            expiry_dt = datetime.fromtimestamp(unix_ts, tz=timezone.utc)
-            now = datetime.now(timezone.utc)
-            return now >= expiry_dt
-        except Exception as e:
-            logger.exception("AD password expiry parse failed for %s: %s", login, e)
-            return None
+        filetime = int(exp_raw)
+        # FILETIME (100-нс тики с 1601-01-01) -> Unix epoch
+        unix_ts = (filetime - 116444736000000000) / 10**7
+        expiry_dt = datetime.fromtimestamp(unix_ts, tz=timezone.utc)
+        now = datetime.now(timezone.utc)
+        return now >= expiry_dt
+    except Exception as e:
+        logger.exception("AD password expired check failed for %s: %s", login, e)
+        return None
