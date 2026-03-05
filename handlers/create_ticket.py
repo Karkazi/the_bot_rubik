@@ -407,6 +407,39 @@ async def ticket_rubik_selected(callback: CallbackQuery, state: FSMContext):
     if not is_user_registered(callback.from_user.id):
         await callback.answer("Сначала пройдите регистрацию.", show_alert=True)
         return
+    from core.ad_ldap import is_password_expired
+    import asyncio as _asyncio_tg
+
+    profile = get_user_profile(callback.from_user.id) or {}
+    login = (profile.get("login") or "").strip()
+    if not login:
+        await callback.message.edit_text(
+            "В профиле не указан рабочий логин. Обратитесь в поддержку для смены пароля.",
+            parse_mode="HTML",
+            reply_markup=get_main_menu_keyboard(callback.from_user.id),
+        )
+        await callback.answer()
+        return
+    try:
+        expired = await _asyncio_tg.to_thread(is_password_expired, login)
+    except Exception:
+        expired = None
+    if expired is False:
+        await callback.message.edit_text(
+            "Смена пароля через бота доступна только если срок действия вашего пароля истёк.",
+            parse_mode="HTML",
+            reply_markup=get_main_menu_keyboard(callback.from_user.id),
+        )
+        await callback.answer()
+        return
+    if expired is None:
+        await callback.message.edit_text(
+            "Не удалось проверить в AD, истёк ли ваш пароль. Обратитесь на первую линию поддержки.",
+            parse_mode="HTML",
+            reply_markup=get_main_menu_keyboard(callback.from_user.id),
+        )
+        await callback.answer()
+        return
     await state.clear()
     from states import ChangePasswordStates
     await state.set_state(ChangePasswordStates.WAITING_FOR_NEW_PASSWORD)
