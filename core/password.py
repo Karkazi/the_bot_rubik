@@ -1,13 +1,16 @@
 """
 Смена пароля: создание задачи в Jira AA.
 Используются данные из профиля: логин (AD account), телефон (Existing phone number).
+Перед созданием заявки дополнительно проверяется в AD, что пароль действительно истёк.
 """
 import logging
 from typing import Tuple, Optional
+import asyncio
 
 from user_storage import get_user_profile
 from core.jira_aa import create_password_change_issue, _set_reporter  # type: ignore[attr-defined]
 from validators import normalize_phone_for_jira
+from core.ad_ldap import is_password_expired
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +38,23 @@ async def request_password_change(
         return False, "В профиле не указан рабочий логин."
     if not phone:
         return False, "В профиле не указан номер телефона."
+
+    # Проверка в AD: смена пароля через бота разрешена только при истёкшем пароле
+    try:
+        expired = await asyncio.to_thread(is_password_expired, login)
+    except Exception as e:
+        logger.exception("Не удалось проверить статус пароля в AD для %s: %s", login, e)
+        expired = None
+    if expired is False:
+        return False, (
+            "Смена пароля через бота доступна только если срок действия вашего пароля истёк. "
+            "Пока пароль действителен, используйте стандартные средства смены пароля или обратитесь в поддержку."
+        )
+    if expired is None:
+        return False, (
+            "Не удалось проверить в AD, истёк ли ваш пароль. "
+            "Обратитесь на первую линию поддержки для смены пароля."
+        )
 
     jira_phone = normalize_phone_for_jira(phone)
     result = await create_password_change_issue(

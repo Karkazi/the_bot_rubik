@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-# Атрибуты AD для профиля бота
+# Атрибуты AD для профиля бота (поиск по телефону)
 AD_ATTRS = [
     "displayName",
     "cn",
@@ -20,6 +20,13 @@ AD_ATTRS = [
     "ipPhone",
     "department",
     "title",
+]
+
+# Атрибуты для проверки статуса пароля
+AD_PASSWORD_ATTRS = [
+    "pwdLastSet",
+    "userAccountControl",
+    "msDS-UserPasswordExpiryTimeComputed",
 ]
 
 
@@ -153,3 +160,89 @@ def search_user_by_phone(phone: str) -> Optional[Dict[str, str]]:
     except Exception as e:
         logger.exception("AD search by phone failed: %s", e)
         return None
+
+
+def is_password_expired(login: str) -> Optional[bool]:
+    """
+    Проверяет по AD, помечён ли пароль пользователя как истёкший.
+    Возвращает:
+      - True  — пароль истёк (PasswordExpired);
+      - False — пароль не истёк;
+      - None  — не удалось определить (ошибка подключения/поиска).
+    Безопасное поведение на стороне вызывающего кода: при None лучше не разрешать смену
+    пароля через бота и предложить обратиться в поддержку.
+    """
+    from config import CONFIG
+
+    ad = CONFIG.get("AD_LDAP") or {}
+    url = (ad.get("URL") or "").strip()
+    bind_user = (ad.get("BIND_USER") or "").strip()
+    bind_password = (ad.get("BIND_PASSWORD") or "").strip()
+    base_dn = (ad.get("BASE_DN") or "").strip()
+    verify_ssl = ad.get("VERIFY_SSL", False)
+
+    if not url or not bind_user or not bind_password or not base_dn:
+        logger.warning("AD_LDAP не настроен (URL/BIND_USER/BIND_PASSWORD/BASE_DN)")
+        return None
+
+    login = (login or "").strip()
+    if not login:
+        return None
+
+    try:
+        from ldap3 import Server, Connection, ALL, SUBTREE, Tls
+        import ssl
+        from datetime import datetime, timezone
+
+        use_ssl = url.lower().startswith("ldaps://")
+        if "://" in url:
+            url = url.split("://", 1)[1]
+        host, _, port_str = url.partition(":")
+        port = int(port_str) if port_str else (636 if use_ssl else 389)
+
+        tls = None
+        if use_ssl and not verify_ssl:
+            tls = Tls(validate=ssl.CERT_NONE)
+
+        server = Server(host, port=port, use_ssl=use_ssl, tls=tls, get_info=ALL)
+        conn = Connection(server, user=bind_user, password=bind_password, auto_bind=True)
+
+        search_filter = f"(sAMAccountName={login})"
+        conn.search(
+            base_dn,
+            search_filter,
+            search_scope=SUBTREE,
+            attributes=AD_PASSWORD_ATTRS,
+            size_limit=1,
+        )
+        if not conn.entries:
+            conn.unbind()
+            return None
+        entry = conn.entries[0]
+        conn.unbind()
+        attrs = entry.entry_attributes_as_dict
+
+        # 1) Явный флаг PASSWORD_EXPIRED (0x800000) в userAccountControl
+        try:
+            uac_raw = _get_first(attrs, "userAccountControl")
+            uac = int(uac_raw) if uac_raw else 0
+        except Exception:
+            uac = 0
+        PASSWORD_EXPIRED_FLAG = 0x800000
+        if uac & PASSWORD_EXPIRED_FLAG:
+            return True
+
+        # 2) Сравнение msDS-UserPasswordExpiryTimeComputed с текущим временем
+        exp_raw = _get_first(attrs, "msDS-UserPasswordExpiryTimeComputed")
+        if not exp_raw:
+            return None
+        try:
+            filetime = int(exp_raw)
+            # FILETIME (100-нс тики с 1601-01-01) -> Unix epoch
+            unix_ts = (filetime - 116444736000000000) / 10**7
+            expiry_dt = datetime.fromtimestamp(unix_ts, tz=timezone.utc)
+            now = datetime.now(timezone.utc)
+            return now >= expiry_dt
+        except Exception as e:
+            logger.exception("AD password expiry parse failed for %s: %s", login, e)
+            return None
