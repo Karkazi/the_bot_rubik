@@ -993,16 +993,44 @@ async def run_max_bot() -> None:
                             else:
                                 response = {"text": "Заявка не найдена или доступ запрещён.", "parse_mode": "HTML", "buttons": [{"id": "back_to_main", "label": "🔙 В главное меню"}]}
                         elif callback_id == "ticket_rubik_password_change":
-                            from user_storage import is_user_registered
+                            from user_storage import is_user_registered, get_user_profile as _get_profile_max
+                            from core.ad_ldap import is_password_expired as _is_password_expired_max
+                            import asyncio as _asyncio_max
                             if not is_user_registered(user_id, "max"):
                                 response = {"text": "Сначала пройдите регистрацию или привяжите аккаунт.", "parse_mode": "HTML", "buttons": [{"id": "back_to_main", "label": "🔙 В главное меню"}]}
                             else:
-                                _pending_password_max[user_id] = True
-                                response = {
-                                    "text": "🔑 <b>Смена пароля</b>\n\nРубик поможет! Введите новый пароль (или нажмите Отмена):",
-                                    "parse_mode": "HTML",
-                                    "buttons": [{"id": "cancel", "label": "❌ Отмена"}],
-                                }
+                                profile = _get_profile_max(user_id, "max") or {}
+                                login = (profile.get("login") or "").strip()
+                                if not login:
+                                    response = {
+                                        "text": "В профиле не указан рабочий логин. Обратитесь в поддержку для смены пароля.",
+                                        "parse_mode": "HTML",
+                                        "buttons": [{"id": "back_to_main", "label": "🔙 В главное меню"}],
+                                    }
+                                else:
+                                    try:
+                                        expired = await _asyncio_max.to_thread(_is_password_expired_max, login)
+                                    except Exception:
+                                        expired = None
+                                    if expired is False:
+                                        response = {
+                                            "text": "Смена пароля через бота доступна только если срок действия вашего пароля истёк.",
+                                            "parse_mode": "HTML",
+                                            "buttons": [{"id": "back_to_main", "label": "🔙 В главное меню"}],
+                                        }
+                                    elif expired is None:
+                                        response = {
+                                            "text": "Не удалось проверить в AD, истёк ли ваш пароль. Обратитесь на первую линию поддержки.",
+                                            "parse_mode": "HTML",
+                                            "buttons": [{"id": "back_to_main", "label": "🔙 В главное меню"}],
+                                        }
+                                    else:
+                                        _pending_password_max[user_id] = True
+                                        response = {
+                                            "text": "🔑 <b>Смена пароля</b>\n\nРубик поможет! Введите новый пароль (или нажмите Отмена):",
+                                            "parse_mode": "HTML",
+                                            "buttons": [{"id": "cancel", "label": "❌ Отмена"}],
+                                        }
                         elif lupa_flow.is_in_lupa_flow(user_id) and (callback_id == "cancel" or callback_id.startswith("lupa_")):
                             response = lupa_flow.handle_lupa_callback(user_id, callback_id)
                             if response is None:
@@ -1158,14 +1186,8 @@ async def run_max_bot() -> None:
                                                         save_user_profile(user_id, enriched)
                                                 except Exception:
                                                     pass
-                                                lines = [
-                                                    f"• ФИО: {profile.get('full_name', '')}",
-                                                    f"• Логин: {profile.get('login', '')}",
-                                                    f"• Почта: {profile.get('email', '')}",
-                                                    f"• Телефон: {profile.get('phone', '')}",
-                                                ]
                                                 response = {
-                                                    "text": "✅ <b>Регистрация завершена</b>\n\n" + "\n".join(lines) + "\n\nТеперь доступны кнопки «Поменять пароль» и «Поменять учётные данные».",
+                                                    "text": "✅ <b>Регистрация завершена!</b>",
                                                     "parse_mode": "HTML",
                                                     "buttons": [{"id": "back_to_main", "label": "🔙 В главное меню"}],
                                                 }

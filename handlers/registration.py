@@ -143,18 +143,8 @@ async def process_ad_contact(message: Message, state: FSMContext):
             save_user_profile(message.from_user.id, enriched)
     except Exception:
         pass
-    lines = [
-        f"• ФИО: {profile.get('full_name', '')}",
-        f"• Логин: {profile.get('login', '')}",
-        f"• Почта: {profile.get('email', '')}",
-        f"• Телефон: {profile.get('phone', '')}",
-    ]
-    if profile.get("department"):
-        lines.append(f"• Подразделение: {profile['department']}")
     await message.reply(
-        "✅ <b>Регистрация завершена</b>\n\n"
-        + "\n".join(lines)
-        + "\n\nТеперь вам доступны кнопки «Поменять пароль» и «Поменять учётные данные».",
+        "✅ <b>Регистрация завершена!</b>",
         parse_mode="HTML",
         reply_markup=remove_reply_keyboard(),
     )

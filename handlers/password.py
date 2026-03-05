@@ -8,8 +8,10 @@ from aiogram.fsm.context import FSMContext
 
 from states import ChangePasswordStates
 from keyboards import get_main_menu_keyboard, get_cancel_keyboard
-from user_storage import is_user_registered
+from user_storage import is_user_registered, get_user_profile
 from core.password import request_password_change
+from core.ad_ldap import is_password_expired
+import asyncio
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -19,6 +21,27 @@ router = Router()
 async def change_password_start(callback: CallbackQuery, state: FSMContext):
     if not is_user_registered(callback.from_user.id):
         await callback.answer("Сначала пройдите регистрацию.", show_alert=True)
+        return
+    profile = get_user_profile(callback.from_user.id) or {}
+    login = (profile.get("login") or "").strip()
+    if not login:
+        await callback.answer("В профиле не указан рабочий логин. Обратитесь в поддержку.", show_alert=True)
+        return
+    try:
+        expired = await asyncio.to_thread(is_password_expired, login)
+    except Exception:
+        expired = None
+    if expired is False:
+        await callback.answer(
+            "Смена пароля через бота доступна только если срок действия вашего пароля истёк.",
+            show_alert=True,
+        )
+        return
+    if expired is None:
+        await callback.answer(
+            "Не удалось проверить в AD, истёк ли ваш пароль. Обратитесь на первую линию поддержки.",
+            show_alert=True,
+        )
         return
     await state.set_state(ChangePasswordStates.WAITING_FOR_NEW_PASSWORD)
     await callback.message.edit_text(
